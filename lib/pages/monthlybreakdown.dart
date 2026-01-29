@@ -57,7 +57,9 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
         : 24;
 
     final double homeLoanAmount = _safeDouble(widget.params['homeLoanAmount']);
-    final double interestRate = _safeDouble(widget.params['interestRate']);
+    // Fallback to 9.0 if 0 is passed accidentally
+    double interestRate = _safeDouble(widget.params['interestRate']);
+    if (interestRate == 0) interestRate = 9.0;
     final int homeLoanTerm = _safeInt(widget.params['homeLoanTerm']);
 
     final String homeLoanStartMode =

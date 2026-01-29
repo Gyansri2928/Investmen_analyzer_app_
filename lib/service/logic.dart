@@ -175,6 +175,23 @@ class PropertyCalculator {
     double pl2StartMonth = possessionMonths + pl2Delay + 1;
 
     // --- SIMULATION LOOP ---
+    double interestCutoffMonth = possessionMonths;
+
+    // 1. If Last Disbursement is set, that is the natural cutoff
+    double explicitLast = getSafeValue(
+      assumptions['lastBankDisbursementMonth'],
+    );
+    if (explicitLast > 0) {
+      interestCutoffMonth = explicitLast;
+    }
+
+    // 2. If Manual Mode is ON, interest stops 1 month before EMI starts
+    if (assumptions['homeLoanStartMode'] == 'manual') {
+      double manualMonth = getSafeValue(assumptions['homeLoanStartMonth']);
+      if (manualMonth > 0) {
+        interestCutoffMonth = manualMonth - 1;
+      }
+    }
     double cumulativeDisbursement = 0;
     List<Map<String, dynamic>> monthlyLedger = [];
     double totalIDC = 0;
@@ -199,7 +216,7 @@ class PropertyCalculator {
       double m = startMonth + (i * interval);
       if (m <= fundingEndMonth && hlAmount > 0) {
         double monthlyInt = (slabAmount * (hlRate / 100)) / 12;
-        double duration = max(0, possessionMonths - m);
+        double duration = max(0, interestCutoffMonth - m);
         idcSchedule.add({
           'slabNo': i + 1,
           'releaseMonth': m,

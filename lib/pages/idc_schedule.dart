@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../main.dart';
+import '../main.dart'; // For AppColors
 
 class IdcSchedulePage extends StatelessWidget {
   final Map<String, dynamic> params;
@@ -16,7 +16,7 @@ class IdcSchedulePage extends StatelessWidget {
     ).format(val);
   }
 
-  // ✅ Helper for safe parsing (Fixes the "3.0" error)
+  // ✅ Helper for safe parsing
   int _safeInt(dynamic val) {
     if (val == null) return 0;
     return (double.tryParse(val.toString()) ?? 0).toInt();
@@ -38,8 +38,10 @@ class IdcSchedulePage extends StatelessWidget {
     final int lastBankDisbursementMonth = _safeInt(
       params['lastBankDisbursementMonth'],
     );
+    final String homeLoanStartMode = params['homeLoanStartMode'] ?? 'default';
+    final int manualStartMonth = _safeInt(params['manualStartMonth']);
 
-    // ✅ Fix: Use _safeInt inside map/reduce
+    // Visual Cutoff (for filtering list length only)
     final int derivedLastMonth = idcSchedule.isNotEmpty
         ? idcSchedule.map((s) => _safeInt(s['releaseMonth'])).reduce(max)
         : possessionMonths;
@@ -47,16 +49,25 @@ class IdcSchedulePage extends StatelessWidget {
     final int fundingEndMonth = lastBankDisbursementMonth > 0
         ? lastBankDisbursementMonth
         : derivedLastMonth;
-    // Handle edge case if totalHoldingMonths is 0 (missing), fallback to possession
+
+    // --- LOGIC 1: DETERMINE INTEREST CUTOFF ---
+    int interestEndMonth = possessionMonths;
+    if (lastBankDisbursementMonth > 0) {
+      interestEndMonth = lastBankDisbursementMonth;
+    }
+    // Manual Mode: Interest stops 1 month before HL starts (React Logic)
+    if (homeLoanStartMode == 'manual' && manualStartMonth > 0) {
+      interestEndMonth = manualStartMonth - 1;
+    }
+
     final int effectiveHoldingLimit = holdingLimit > 0
         ? holdingLimit
         : possessionMonths;
-    final int cutoffMonth = min(fundingEndMonth, effectiveHoldingLimit);
+    final int visualCutoffMonth = min(fundingEndMonth, effectiveHoldingLimit);
 
     // 2. FILTER & CALCULATE
-    // ✅ Fix: Use _safeInt in filter
     final filteredSchedule = idcSchedule
-        .where((row) => _safeInt(row['releaseMonth']) <= cutoffMonth)
+        .where((row) => _safeInt(row['releaseMonth']) <= visualCutoffMonth)
         .toList();
 
     final double disbursementPerSlab = idcSchedule.isNotEmpty
@@ -67,9 +78,14 @@ class IdcSchedulePage extends StatelessWidget {
 
     double grandTotalInterest = 0;
     for (var row in filteredSchedule) {
-      // ✅ Fix: Use _safeInt
       int releaseMonth = _safeInt(row['releaseMonth']);
-      int duration = max(0, possessionMonths - releaseMonth);
+
+      // STOPPER: If slab is released AFTER the cutoff, ignore it
+      if (releaseMonth > interestEndMonth) continue;
+
+      // MATH: Calculate duration (React Logic: End - Release)
+      int duration = max(0, interestEndMonth - releaseMonth);
+
       grandTotalInterest += (baseSlabInterest * duration);
     }
 
@@ -102,7 +118,7 @@ class IdcSchedulePage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              "Breakdown up to Month $cutoffMonth (Possession)",
+              "Breakdown up to Month $visualCutoffMonth",
               style: TextStyle(
                 color: isDark ? Colors.white54 : Colors.grey.shade600,
                 fontSize: 13,
@@ -175,7 +191,7 @@ class IdcSchedulePage extends StatelessWidget {
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
-                  headingRowColor: MaterialStateProperty.all(
+                  headingRowColor: WidgetStateProperty.all(
                     isDark ? Colors.white10 : Colors.grey.shade100,
                   ),
                   columnSpacing: 24,
@@ -220,9 +236,12 @@ class IdcSchedulePage extends StatelessWidget {
                         ),
                       ),
                     ),
+                    // ✅ DYNAMIC HEADER (Possession vs Interest Duration)
                     DataColumn(
                       label: Text(
-                        "To Poss.",
+                        interestEndMonth < possessionMonths
+                            ? "Int.\nDur."
+                            : "To Poss.",
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
@@ -255,20 +274,30 @@ class IdcSchedulePage extends StatelessWidget {
                     int idx = entry.key;
                     var row = entry.value;
 
-                    // ✅ Fix: Use _safeInt
                     int slabNo = _safeInt(row['slabNo']);
                     int releaseMonth = _safeInt(row['releaseMonth']);
 
-                    int monthsToPossession = max(
-                      0,
-                      possessionMonths - releaseMonth,
-                    );
+                    // --- LOGIC CHANGE 3: CORRECT DURATION CALCULATION ---
+                    int interestDuration = 0;
+                    if (releaseMonth <= interestEndMonth) {
+                      interestDuration = max(
+                        0,
+                        interestEndMonth - releaseMonth + 1,
+                      );
+                    }
+
                     double cumulativeMonthlyInterest =
                         baseSlabInterest * (idx + 1);
                     double totalCostForSlab =
-                        baseSlabInterest * monthsToPossession;
+                        baseSlabInterest * interestDuration;
 
                     return DataRow(
+                      // Gray out rows with no interest duration
+                      color: interestDuration <= 0
+                          ? WidgetStateProperty.all(
+                              isDark ? Colors.white10 : Colors.grey.shade200,
+                            )
+                          : null,
                       cells: [
                         DataCell(
                           Text(
@@ -304,26 +333,36 @@ class IdcSchedulePage extends StatelessWidget {
                             ),
                           ),
                         ),
+                        // ✅ FIX: SHOW INTEREST DURATION (Not Months To Possession)
                         DataCell(
                           Center(
                             child: Text(
-                              monthsToPossession.toString(),
+                              interestDuration > 0
+                                  ? interestDuration.toString()
+                                  : "-",
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
-                                color: text,
+                                color: interestDuration > 0
+                                    ? text
+                                    : Colors.grey,
                               ),
                             ),
                           ),
                         ),
                         DataCell(
-                          Text(
-                            _formatCurrency(cumulativeMonthlyInterest),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.orange,
-                            ),
-                          ),
+                          interestDuration > 0
+                              ? Text(
+                                  _formatCurrency(cumulativeMonthlyInterest),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange,
+                                  ),
+                                )
+                              : const Text(
+                                  "-",
+                                  style: TextStyle(color: Colors.grey),
+                                ),
                         ),
                         DataCell(
                           Text(
@@ -343,6 +382,8 @@ class IdcSchedulePage extends StatelessWidget {
             ),
 
             const SizedBox(height: 20),
+
+            // Info Footer
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -412,7 +453,7 @@ class IdcSchedulePage extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 10,
                     color: Colors.grey,
                     fontWeight: FontWeight.bold,

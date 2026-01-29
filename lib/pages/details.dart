@@ -84,6 +84,13 @@ class DetailsTab extends StatelessWidget {
         ),
       );
     }
+    final Map assumptions = results['assumptions'] ?? {};
+    final String safeStartMode =
+        results['homeLoanStartMode'] ??
+        assumptions['homeLoanStartMode'] ??
+        'default';
+    final dynamic safeStartMonth =
+        results['homeLoanStartMonth'] ?? assumptions['homeLoanStartMonth'];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -204,8 +211,11 @@ class DetailsTab extends StatelessWidget {
                                   'totalHoldingMonths':
                                       results['totalHoldingMonths'],
                                   'lastBankDisbursementMonth':
-                                      results['lastBankDisbursementMonth'],
+                                      results['lastBankDisbursementMonth'] ??
+                                      assumptions['lastBankDisbursementMonth'],
                                   'interestRate': results['homeLoanRate'],
+                                  'homeLoanStartMode': safeStartMode,
+                                  'manualStartMonth': safeStartMonth,
                                 },
                               ),
                             ),
@@ -229,6 +239,22 @@ class DetailsTab extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () {
+                      final Map assumptions = results['assumptions'] ?? {};
+                      final String startMode =
+                          results['homeLoanStartMode'] ??
+                          assumptions['homeLoanStartMode'] ??
+                          'default';
+                      final dynamic startMonth =
+                          results['homeLoanStartMonth'] ??
+                          assumptions['homeLoanStartMonth'];
+                      final double safeRate =
+                          double.tryParse(
+                            (results['homeLoanRate'] ??
+                                    assumptions['homeLoanRate'] ??
+                                    9.0)
+                                .toString(),
+                          ) ??
+                          9.0;
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -239,16 +265,17 @@ class DetailsTab extends StatelessWidget {
                               'possessionMonths': results['possessionMonths'],
                               'homeLoanAmount': results['homeLoanAmount'],
                               'propertyName': "Property",
-                              'interestRate': results['homeLoanRate'],
-                              'homeLoanTerm': results['homeLoanTerm'],
+                              'interestRate':
+                                  safeRate, // Pass the safely extracted rate
+                              'homeLoanTerm':
+                                  results['homeLoanTerm'] ??
+                                  assumptions['homeLoanTerm'],
                               'lastBankDisbursementMonth':
-                                  results['lastBankDisbursementMonth'],
-
-                              // ✅ FIX: Pass the ACTUAL mode and start month from results
-                              'homeLoanStartMode':
-                                  results['homeLoanStartMode'] ?? 'default',
-                              'manualStartMonth': results['homeLoanStartMonth'],
+                                  results['lastBankDisbursementMonth'] ??
+                                  assumptions['lastBankDisbursementMonth'],
                               'fullHomeLoanEMI': results['homeLoanEMI'],
+                              'homeLoanStartMode': startMode,
+                              'manualStartMonth': startMonth,
                             },
                           ),
                         ),
