@@ -1,5 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart'; // Import Get
+import 'package:property_analyzer_mobile/controller/property_controller.dart'; // Import Controller
 import '../main.dart'; // For AppColors
 
 class InputsTab extends StatefulWidget {
@@ -23,6 +25,7 @@ class InputsTab extends StatefulWidget {
 }
 
 class _InputsTabState extends State<InputsTab> {
+  final controller = Get.find<PropertyController>();
   int _currentStep = 1;
   int _maxStepReached = 1;
   String _activeAccordion = 'prop_mgmt';
@@ -33,7 +36,7 @@ class _InputsTabState extends State<InputsTab> {
     super.initState();
     // Initialize with existing value
     _exitPriceCtrl = TextEditingController(
-      text: widget.userSelections['selectedExitPrice']?.toString(),
+      text: controller.userSelections['selectedExitPrice']?.toString(),
     );
   }
 
@@ -70,47 +73,37 @@ class _InputsTabState extends State<InputsTab> {
   }
 
   void _autoPopulateExitPrice() {
+    // Read from controller
     double purchasePrice =
-        double.tryParse(widget.propertyData['purchasePrice'].toString()) ?? 0;
-    String currentExitPrice = widget.userSelections['selectedExitPrice']
+        double.tryParse(controller.propertyData['purchasePrice'].toString()) ??
+        0;
+    String currentExitPrice = controller.userSelections['selectedExitPrice']
         .toString();
 
-    // Only auto-populate if price exists AND exit price is empty/zero
     if (purchasePrice > 0 &&
         (currentExitPrice.isEmpty ||
             currentExitPrice == '0' ||
             currentExitPrice == 'null')) {
       double duration =
           double.tryParse(
-            widget.propertyData['assumptions']['investmentPeriod'].toString(),
+            controller.propertyData['assumptions']['investmentPeriod']
+                .toString(),
           ) ??
           0;
       String unit =
-          widget.propertyData['assumptions']['holdingPeriodUnit'] ?? 'years';
+          controller.propertyData['assumptions']['holdingPeriodUnit'] ??
+          'years';
       double years = unit == 'months' ? duration / 12 : duration;
 
-      double increment = 0;
-      if (years < 1)
-        increment = 500;
-      else if (years < 2)
-        increment = 1000;
-      else if (years < 3)
-        increment = 2000;
-      else if (years < 4)
-        increment = 2500;
-      else if (years < 5)
-        increment = 3000;
-      else
-        increment = 3500;
-
+      double increment = years < 1
+          ? 500
+          : (years < 2 ? 1000 : (years < 3 ? 2000 : 3500));
       double calculatedExit = purchasePrice + increment;
       String newVal = calculatedExit.toStringAsFixed(0);
 
-      // ✅ UPDATE BOTH DATA AND CONTROLLER
-      widget.userSelections['selectedExitPrice'] = newVal;
-      _exitPriceCtrl.text =
-          newVal; // <--- This forces the UI to update immediately
-      widget.onDataChanged();
+      // ✅ Update Controller & UI
+      controller.updateSelection('selectedExitPrice', newVal);
+      _exitPriceCtrl.text = newVal;
     }
   }
 
@@ -121,8 +114,7 @@ class _InputsTabState extends State<InputsTab> {
         return AlertDialog(
           title: const Text("Reset Property Details?"),
           content: const Text(
-            "This will clear prices and taxes.\n\nNote: Your Loan Distribution & Payment Plan settings will be KEPT.",
-            style: TextStyle(fontSize: 13),
+            "This will clear all prices, taxes, and scenarios.",
           ),
           actions: [
             TextButton(
@@ -131,17 +123,29 @@ class _InputsTabState extends State<InputsTab> {
             ),
             TextButton(
               onPressed: () {
-                Navigator.of(ctx).pop();
-                widget.onReset();
+                // 1. Reset the Data in GetX
+                controller.resetToDefaults();
+
+                // 2. Reset the UI State
                 setState(() {
                   _currentStep = 1;
                   _maxStepReached = 1;
+
+                  // ✅ FIX: Manually clear the persistent text controller
+                  _exitPriceCtrl.clear();
+
+                  // Optional: if you have other internal UI flags, reset them here
+                  _activeAccordion = 'prop_mgmt';
                 });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Data has been reset"),
-                    duration: Duration(seconds: 2),
-                  ),
+
+                Navigator.of(ctx).pop();
+
+                Get.snackbar(
+                  "Reset Successful",
+                  "All inputs have been cleared.",
+                  snackPosition: SnackPosition.BOTTOM,
+                  backgroundColor: Colors.green.withOpacity(0.8),
+                  colorText: Colors.white,
                 );
               },
               child: const Text("Reset", style: TextStyle(color: Colors.red)),
@@ -153,15 +157,19 @@ class _InputsTabState extends State<InputsTab> {
   }
 
   void _addProperty() {
-    List<dynamic> props = widget.propertyData['properties'];
+    List<dynamic> props = controller.propertyData['properties'];
+
+    // ... (Your maxId logic is correct) ...
     int maxId = 0;
     if (props.isNotEmpty) {
       maxId = props.fold<int>(0, (prev, element) {
         int currentId = int.tryParse(element['id'].toString()) ?? 0;
-        return currentId > prev ? currentId : prev;
+        return max(prev, currentId);
       });
     }
     int newId = maxId + 1;
+
+    // 1. Add to the list
     props.add({
       'id': newId,
       'size': '1000',
@@ -171,79 +179,114 @@ class _InputsTabState extends State<InputsTab> {
       'rating': 0,
       'isHighlighted': false,
     });
-    widget.onDataChanged();
+
+    controller.updateProperty(newId, 'name', 'Property $newId');
   }
 
   void _removeProperty(int index) {
-    List<dynamic> props = widget.propertyData['properties'];
+    List<dynamic> props = controller.propertyData['properties'];
     var removedProp = props[index];
     props.removeAt(index);
-    if (widget.userSelections['selectedPropertyId'] == removedProp['id']) {
+
+    // Logic to switch selection if the deleted one was active
+    if (controller.userSelections['selectedPropertyId'] == removedProp['id']) {
       if (props.isNotEmpty) {
-        widget.userSelections['selectedPropertyId'] = props[0]['id'];
-        widget.userSelections['selectedPropertySize'] = props[0]['size'];
+        // Direct assignment to controller map
+        controller.userSelections['selectedPropertyId'] = props[0]['id'];
+        controller.userSelections['selectedPropertySize'] = props[0]['size'];
       }
     }
-    widget.onDataChanged();
+
+    // ✅ FIX: Trigger GetX updates manually since we modified the list directly
+    controller.propertyData.refresh();
+    controller.userSelections.refresh();
+    controller.calculate();
+    controller.saveData(); // Persists to storage
   }
 
   void _addExitScenario() {
     double currentBase =
         double.tryParse(
-          widget.userSelections['selectedExitPrice'].toString(),
+          controller.userSelections['selectedExitPrice'].toString(),
         ) ??
         0;
-    List currentScenarios = widget.userSelections['scenarioExitPrices'] as List;
+
+    List currentScenarios =
+        controller.userSelections['scenarioExitPrices'] as List;
+
     double maxPrice = currentBase;
     if (currentScenarios.isNotEmpty) {
       maxPrice = currentScenarios
           .map((e) => double.parse(e.toString()))
           .reduce(max);
     }
+
+    // 1. Add the new price
     currentScenarios.add(maxPrice + 500);
-    widget.onDataChanged();
+
+    // ✅ 2. FIX: Tell GetX that the 'userSelections' map has changed internally
+    controller.userSelections.refresh();
+
+    // 3. Trigger math and save
+    controller.calculate();
+    controller.saveData();
   }
 
   void _removeExitScenario(int index) {
-    (widget.userSelections['scenarioExitPrices'] as List).removeAt(index);
-    widget.onDataChanged();
+    List currentScenarios =
+        controller.userSelections['scenarioExitPrices'] as List;
+    currentScenarios.removeAt(index);
+
+    // ✅ FIX: Tell GetX to refresh the UI
+    controller.userSelections.refresh();
+
+    controller.calculate();
+    controller.saveData();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 100),
-      child: Column(
-        children: [
-          _buildHeaderCard(),
-          const SizedBox(height: 20),
-          _buildStepperItem(
-            stepIndex: 1,
-            title: "Property Details",
-            content: _buildStep1Content(),
-            isLast: false,
-          ),
-          _buildStepperItem(
-            stepIndex: 2,
-            title: "Payment Plan",
-            content: _buildStep2Content(),
-            isLast: false,
-          ),
-          _buildStepperItem(
-            stepIndex: 3,
-            title: "Loan Config",
-            content: _buildStep3Content(),
-            isLast: false,
-          ),
-          _buildStepperItem(
-            stepIndex: 4,
-            title: "Exit Scenarios",
-            content: _buildStep4Content(),
-            isLast: true,
-          ),
-        ],
-      ),
-    );
+    return Obx(() {
+      // Access data here to trigger updates
+      return SingleChildScrollView(
+        padding: const EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: 100,
+        ),
+        child: Column(
+          children: [
+            _buildHeaderCard(),
+            const SizedBox(height: 20),
+            _buildStepperItem(
+              stepIndex: 1,
+              title: "Property Details",
+              content: _buildStep1Content(),
+              isLast: false,
+            ),
+            _buildStepperItem(
+              stepIndex: 2,
+              title: "Payment Plan",
+              content: _buildStep2Content(),
+              isLast: false,
+            ),
+            _buildStepperItem(
+              stepIndex: 3,
+              title: "Loan Config",
+              content: _buildStep3Content(),
+              isLast: false,
+            ),
+            _buildStepperItem(
+              stepIndex: 4,
+              title: "Exit Scenarios",
+              content: _buildStep4Content(),
+              isLast: true,
+            ),
+          ],
+        ),
+      );
+    }); // ✅ Close Obx
   }
 
   // --- WIDGET HELPERS (UPDATED FOR DARK MODE) ---
@@ -327,14 +370,14 @@ class _InputsTabState extends State<InputsTab> {
 
   bool _validateCurrentStep(int step) {
     // 1. Get Active Property Safely
-    List props = widget.propertyData['properties'] as List? ?? [];
+    List props = controller.propertyData['properties'] as List? ?? [];
     var matchingProps = props.where(
-      (p) => p['id'] == widget.userSelections['selectedPropertyId'],
+      (p) => p['id'] == controller.userSelections['selectedPropertyId'],
     );
     var activeProp = matchingProps.isNotEmpty
         ? matchingProps.first
         : (props.isNotEmpty ? props[0] : {});
-    var assumptions = widget.propertyData['assumptions'];
+    var assumptions = controller.propertyData['assumptions'];
 
     // Helper to check emptiness
     bool isEmpty(dynamic val) {
@@ -356,7 +399,7 @@ class _InputsTabState extends State<InputsTab> {
         errorMsg = "Please enter Property Size.";
       else if (isEmpty(activeProp['possessionMonths']))
         errorMsg = "Please enter Possession Months.";
-      else if (isEmpty(widget.propertyData['purchasePrice']))
+      else if (isEmpty(controller.propertyData['purchasePrice']))
         errorMsg = "Please enter Purchase Price.";
     }
     // --- STEP 2 CHECKS ---
@@ -365,7 +408,7 @@ class _InputsTabState extends State<InputsTab> {
         errorMsg = "Please enter a valid Holding Period.";
 
       // Custom Plan 100% Check
-      if (widget.propertyData['paymentPlan'] == 'custom') {
+      if (controller.propertyData['paymentPlan'] == 'custom') {
         double total =
             (double.tryParse(assumptions['downPaymentShare'].toString()) ?? 0) +
             (double.tryParse(assumptions['personalLoan1Share'].toString()) ??
@@ -379,7 +422,7 @@ class _InputsTabState extends State<InputsTab> {
       }
 
       // CLP Logic Check
-      if (widget.propertyData['paymentPlan'] == 'clp') {
+      if (controller.propertyData['paymentPlan'] == 'clp') {
         if (isEmpty(assumptions['clpDurationYears']))
           errorMsg = "Please enter Construction Duration.";
         else if (isEmpty(assumptions['bankDisbursementInterval']))
@@ -427,7 +470,7 @@ class _InputsTabState extends State<InputsTab> {
     }
     // --- STEP 4 CHECKS ---
     else if (step == 4) {
-      if (isEmpty(widget.userSelections['selectedExitPrice']))
+      if (isEmpty(controller.userSelections['selectedExitPrice']))
         errorMsg = "Please enter an Expected Exit Price.";
     }
 
@@ -700,6 +743,9 @@ class _InputsTabState extends State<InputsTab> {
         SizedBox(
           height: 40,
           child: TextFormField(
+            key: ValueKey(
+              "${label}_${Get.find<PropertyController>().results.length}",
+            ),
             controller: controller,
             initialValue: controller != null ? null : _formatValue(value),
             keyboardType: keyboardType,
@@ -853,7 +899,7 @@ class _InputsTabState extends State<InputsTab> {
   // you can just paste the previous content blocks here.
 
   Widget _buildStep1Content() {
-    final properties = widget.propertyData['properties'] as List;
+    final properties = controller.propertyData['properties'] as List;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Column(
@@ -942,7 +988,7 @@ class _InputsTabState extends State<InputsTab> {
                               prop['name'],
                               (v) {
                                 prop['name'] = v;
-                                widget.onDataChanged();
+                                controller.saveData();
                               },
                               hint: "e.g. Supernova",
                               keyboardType: TextInputType.text,
@@ -954,7 +1000,7 @@ class _InputsTabState extends State<InputsTab> {
                               prop['location'],
                               (v) {
                                 prop['location'] = v;
-                                widget.onDataChanged();
+                                controller.saveData();
                               },
                               hint: "e.g. Noida",
                               keyboardType: TextInputType.text,
@@ -970,11 +1016,12 @@ class _InputsTabState extends State<InputsTab> {
                                     (v) {
                                       prop['size'] = v;
                                       if (prop['id'] ==
-                                          widget
+                                          controller
                                               .userSelections['selectedPropertyId'])
-                                        widget.userSelections['selectedPropertySize'] =
+                                        controller
+                                                .userSelections['selectedPropertySize'] =
                                             v;
-                                      widget.onDataChanged();
+                                      controller.saveData();
                                     },
                                     hint: "e.g. 1250",
                                     isRequired: true,
@@ -987,7 +1034,7 @@ class _InputsTabState extends State<InputsTab> {
                                     prop['possessionMonths'],
                                     (v) {
                                       prop['possessionMonths'] = v;
-                                      widget.onDataChanged();
+                                      controller.saveData();
                                     },
                                     hint: "e.g. 24",
                                     isRequired: true,
@@ -1017,11 +1064,11 @@ class _InputsTabState extends State<InputsTab> {
                   Expanded(
                     child: _buildInput(
                       "Price (₹/sq.ft) ",
-                      widget.propertyData['purchasePrice'],
-                      (v) {
-                        widget.propertyData['purchasePrice'] = v;
-                        widget.onDataChanged();
-                      },
+                      controller.propertyData['purchasePrice'],
+                      (v) => controller.updateInput(
+                        'purchasePrice',
+                        v,
+                      ), // ✅ Uses Controller Logic
                       hint: "e.g. 6500",
                       isRequired: true,
                     ),
@@ -1030,11 +1077,11 @@ class _InputsTabState extends State<InputsTab> {
                   Expanded(
                     child: _buildInput(
                       "Other Charges",
-                      widget.propertyData['otherCharges'],
-                      (v) {
-                        widget.propertyData['otherCharges'] = v;
-                        widget.onDataChanged();
-                      },
+                      controller.propertyData['otherCharges'],
+                      (v) => controller.updateInput(
+                        'otherCharges',
+                        v,
+                      ), // ✅ Cleaner & Consistent
                       hint: "Lumpsum",
                     ),
                   ),
@@ -1046,11 +1093,11 @@ class _InputsTabState extends State<InputsTab> {
                   Expanded(
                     child: _buildInput(
                       "Stamp Duty (%)",
-                      widget.propertyData['stampDuty'],
-                      (v) {
-                        widget.propertyData['stampDuty'] = v;
-                        widget.onDataChanged();
-                      },
+                      controller.propertyData['stampDuty'],
+                      (v) => controller.updateInput(
+                        'stampDuty',
+                        v,
+                      ), // ✅ Uses Controller Logic
                       hint: "e.g. 5",
                     ),
                   ),
@@ -1058,11 +1105,11 @@ class _InputsTabState extends State<InputsTab> {
                   Expanded(
                     child: _buildInput(
                       "GST (%)",
-                      widget.propertyData['gstPercentage'],
-                      (v) {
-                        widget.propertyData['gstPercentage'] = v;
-                        widget.onDataChanged();
-                      },
+                      controller.propertyData['gstPercentage'],
+                      (v) => controller.updateInput(
+                        'gstPercentage',
+                        v,
+                      ), // ✅ Uses Controller Logic
                       hint: "e.g. 5",
                       isRequired: true,
                     ),
@@ -1077,12 +1124,12 @@ class _InputsTabState extends State<InputsTab> {
   }
 
   Widget _buildStep2Content() {
-    final assumptions = widget.propertyData['assumptions'];
+    final assumptions = controller.propertyData['assumptions'];
     return Column(
       children: [
         _buildDropdown(
           "Select Payment Plan",
-          widget.propertyData['paymentPlan'],
+          controller.propertyData['paymentPlan'],
           [
             {'val': 'clp', 'label': 'CLP (Construction Linked)'},
             {'val': '80-20', 'label': '80:20 (80% HL)'},
@@ -1090,10 +1137,10 @@ class _InputsTabState extends State<InputsTab> {
             {'val': 'rtm', 'label': 'Ready to Move'},
             {'val': 'custom', 'label': 'Custom'},
           ],
-          (v) {
-            widget.propertyData['paymentPlan'] = v;
-            widget.onDataChanged();
-          },
+          (v) => controller.updateInput(
+            'paymentPlan',
+            v,
+          ), // ✅ Cleaner & Consistent
         ),
         const SizedBox(height: 12),
         Row(
@@ -1102,10 +1149,10 @@ class _InputsTabState extends State<InputsTab> {
               child: _buildInput(
                 "Holding Period",
                 assumptions['investmentPeriod'],
-                (v) {
-                  assumptions['investmentPeriod'] = v;
-                  widget.onDataChanged();
-                },
+                (v) => controller.updateAssumption(
+                  'investmentPeriod',
+                  v,
+                ), // ✅ Uses Controller Logic
                 hint: "e.g. 5",
                 isRequired: true,
               ),
@@ -1131,10 +1178,10 @@ class _InputsTabState extends State<InputsTab> {
                       DropdownMenuItem(value: 'years', child: Text("Years")),
                       DropdownMenuItem(value: 'months', child: Text("Months")),
                     ],
-                    onChanged: (v) {
-                      assumptions['holdingPeriodUnit'] = v;
-                      widget.onDataChanged();
-                    },
+                    onChanged: (v) => controller.updateAssumption(
+                      'holdingPeriodUnit',
+                      v,
+                    ), // ✅ Uses Controller Logic
                   ),
                 ),
               ),
@@ -1144,7 +1191,7 @@ class _InputsTabState extends State<InputsTab> {
         // ... inside _buildStep2Content ...
 
         // CLP Specifics (Updated with Funding Window)
-        if (widget.propertyData['paymentPlan'] == 'clp') ...[
+        if (controller.propertyData['paymentPlan'] == 'clp') ...[
           const SizedBox(height: 12),
           _buildAccordionSection(
             id: 'clp_details',
@@ -1159,10 +1206,10 @@ class _InputsTabState extends State<InputsTab> {
                       child: _buildInput(
                         "Duration (Yrs)",
                         assumptions['clpDurationYears'],
-                        (v) {
-                          assumptions['clpDurationYears'] = v;
-                          widget.onDataChanged();
-                        },
+                        (v) => controller.updateAssumption(
+                          'clpDurationYears',
+                          v,
+                        ), // ✅ Uses Controller Logic
                         hint: "e.g. 2",
                         isRequired: true,
                       ),
@@ -1172,10 +1219,10 @@ class _InputsTabState extends State<InputsTab> {
                       child: _buildInput(
                         "Interval (Mo)",
                         assumptions['bankDisbursementInterval'],
-                        (v) {
-                          assumptions['bankDisbursementInterval'] = v;
-                          widget.onDataChanged();
-                        },
+                        (v) => controller.updateAssumption(
+                          'bankDisbursementInterval',
+                          v,
+                        ), // ✅ Uses Controller Logic
                         hint: "e.g. 3",
                         isRequired: true,
                       ),
@@ -1227,10 +1274,10 @@ class _InputsTabState extends State<InputsTab> {
                             child: _buildInput(
                               "First Disb. (Mo)",
                               assumptions['bankDisbursementStartMonth'],
-                              (v) {
-                                assumptions['bankDisbursementStartMonth'] = v;
-                                widget.onDataChanged();
-                              },
+                              (v) => controller.updateAssumption(
+                                'bankDisbursementStartMonth',
+                                v,
+                              ), // ✅ Uses Controller Logic
                               hint: "e.g. 2",
                             ),
                           ),
@@ -1239,27 +1286,26 @@ class _InputsTabState extends State<InputsTab> {
                           Expanded(
                             child: Builder(
                               builder: (ctx) {
-                                // --- FIXED LOGIC START ---
-                                // 1. Get the list safely
+                                // 1. Get the list safely from Controller
                                 List props =
-                                    widget.propertyData['properties']
+                                    controller.propertyData['properties']
                                         as List? ??
                                     [];
 
-                                // 2. Find the active property without using 'orElse' (avoids TypeErrors)
+                                // 2. Find the active property using Controller selections
                                 var matchingProps = props.where(
                                   (p) =>
                                       p['id'] ==
-                                      widget
+                                      controller
                                           .userSelections['selectedPropertyId'],
                                 );
 
-                                // 3. Fallback to the first property if selection not found, or empty map
+                                // 3. Fallback logic
                                 var activeProp = matchingProps.isNotEmpty
                                     ? matchingProps.first
                                     : (props.isNotEmpty ? props[0] : {});
 
-                                // 4. Parse possession (Safe parsing)
+                                // 4. Parse possession
                                 int poss =
                                     int.tryParse(
                                       activeProp['possessionMonths']
@@ -1268,17 +1314,15 @@ class _InputsTabState extends State<InputsTab> {
                                     ) ??
                                     24;
                                 int safeLast = (poss - 6) > 0 ? (poss - 6) : 24;
-                                // --- FIXED LOGIC END ---
 
                                 return _buildInput(
                                   "Last Disb. (Mo)",
-                                  widget
-                                      .propertyData['assumptions']['lastBankDisbursementMonth'],
-                                  (v) {
-                                    widget.propertyData['assumptions']['lastBankDisbursementMonth'] =
-                                        v;
-                                    widget.onDataChanged();
-                                  },
+                                  controller
+                                      .propertyData['assumptions']['lastBankDisbursementMonth'], // ✅ Read from Controller
+                                  (v) => controller.updateAssumption(
+                                    'lastBankDisbursementMonth',
+                                    v,
+                                  ), // ✅ Uses Controller Logic
                                   hint: "e.g. $safeLast",
                                 );
                               },
@@ -1310,15 +1354,18 @@ class _InputsTabState extends State<InputsTab> {
   // 📝 CONTENT: Step 3 (Loan Config - Updated Logic)
   // ======================================================
   Widget _buildStep3Content() {
-    final assumptions = widget.propertyData['assumptions'];
+    final assumptions = controller.propertyData['assumptions'];
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     String getLoanAmount(String shareKey) {
       double price =
-          double.tryParse(widget.propertyData['purchasePrice'].toString()) ?? 0;
+          double.tryParse(
+            controller.propertyData['purchasePrice'].toString(),
+          ) ??
+          0;
       double size =
           double.tryParse(
-            widget.userSelections['selectedPropertySize'].toString(),
+            controller.userSelections['selectedPropertySize'].toString(),
           ) ??
           0;
       double share = double.tryParse(assumptions[shareKey].toString()) ?? 0;
@@ -1341,10 +1388,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Rate (%)",
                       assumptions['homeLoanRate'],
-                      (v) {
-                        assumptions['homeLoanRate'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'homeLoanRate',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 8.5",
                       isRequired: true,
                     ),
@@ -1354,10 +1401,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Tenure (Yrs)",
                       assumptions['homeLoanTerm'],
-                      (v) {
-                        assumptions['homeLoanTerm'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'homeLoanTerm',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 20",
                       isRequired: true,
                     ),
@@ -1398,10 +1445,10 @@ class _InputsTabState extends State<InputsTab> {
                             assumptions['homeLoanStartMode'] == 'manual',
                           ],
                           onPressed: (idx) {
-                            assumptions['homeLoanStartMode'] = idx == 0
-                                ? 'default'
-                                : 'manual';
-                            widget.onDataChanged();
+                            controller.updateAssumption(
+                              'homeLoanStartMode',
+                              idx == 0 ? 'default' : 'manual',
+                            ); // ✅ Correct
                           },
                           borderRadius: BorderRadius.circular(8),
                           constraints: const BoxConstraints(
@@ -1425,10 +1472,10 @@ class _InputsTabState extends State<InputsTab> {
                       _buildInput(
                         "Exact Start Month",
                         assumptions['homeLoanStartMonth'],
-                        (v) {
-                          assumptions['homeLoanStartMonth'] = v;
-                          widget.onDataChanged();
-                        },
+                        (v) => controller.updateAssumption(
+                          'homeLoanStartMonth',
+                          v,
+                        ), // ✅ Correct
                         hint: "e.g. 25",
                         isRequired: true,
                       )
@@ -1517,10 +1564,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Share (%)",
                       assumptions['personalLoan1Share'],
-                      (v) {
-                        assumptions['personalLoan1Share'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan1Share',
+                        v,
+                      ), // ✅ Correct
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1540,10 +1587,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Tenure (Yrs)",
                       assumptions['personalLoan1Term'],
-                      (v) {
-                        assumptions['personalLoan1Term'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan1Term',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 7",
                       isRequired: true,
                     ),
@@ -1553,10 +1600,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Rate (%)",
                       assumptions['personalLoan1Rate'],
-                      (v) {
-                        assumptions['personalLoan1Rate'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan1Rate',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 10.5",
                       isRequired: true,
                     ),
@@ -1568,10 +1615,10 @@ class _InputsTabState extends State<InputsTab> {
                 "Start Month",
                 assumptions['personalLoan1StartMonth'],
                 84,
-                (v) {
-                  assumptions['personalLoan1StartMonth'] = v;
-                  widget.onDataChanged();
-                },
+                (v) => controller.updateAssumption(
+                  'personalLoan1StartMonth',
+                  v,
+                ), // ✅ Correct
                 isDark,
               ),
               Align(
@@ -1604,10 +1651,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Share (%)",
                       assumptions['personalLoan2Share'],
-                      (v) {
-                        assumptions['personalLoan2Share'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan2Share',
+                        v,
+                      ), // ✅ Correct
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1627,10 +1674,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Tenure (Yrs)",
                       assumptions['personalLoan2Term'],
-                      (v) {
-                        assumptions['personalLoan2Term'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan2Term',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 7",
                       isRequired: true,
                     ),
@@ -1640,10 +1687,10 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Rate (%)",
                       assumptions['personalLoan2Rate'],
-                      (v) {
-                        assumptions['personalLoan2Rate'] = v;
-                        widget.onDataChanged();
-                      },
+                      (v) => controller.updateAssumption(
+                        'personalLoan2Rate',
+                        v,
+                      ), // ✅ Correct
                       hint: "e.g. 10.5",
                       isRequired: true,
                     ),
@@ -1655,10 +1702,10 @@ class _InputsTabState extends State<InputsTab> {
                 "Start Month (After Poss.)",
                 assumptions['personalLoan2StartMonth'],
                 36,
-                (v) {
-                  assumptions['personalLoan2StartMonth'] = v;
-                  widget.onDataChanged();
-                },
+                (v) => controller.updateAssumption(
+                  'personalLoan2StartMonth',
+                  v,
+                ), // ✅ Correct
                 isDark,
               ),
             ],
@@ -1707,7 +1754,12 @@ class _InputsTabState extends State<InputsTab> {
     Function(String) onChanged,
     bool isDark,
   ) {
-    double currentVal = double.tryParse(value.toString()) ?? 0;
+    // 1. Safe Parse
+    double parsedVal = double.tryParse(value.toString()) ?? 0;
+
+    // 2. Safe Clamp (Prevents crash if saved value > maxVal)
+    double currentVal = parsedVal.clamp(0.0, maxVal);
+
     return Column(
       children: [
         Row(
@@ -1755,10 +1807,12 @@ class _InputsTabState extends State<InputsTab> {
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               ),
               child: Slider(
-                value: currentVal,
+                value: currentVal, // Uses the clamped safe value
                 min: 0,
                 max: maxVal,
-                divisions: maxVal.toInt(),
+                divisions: maxVal > 0
+                    ? maxVal.toInt()
+                    : 1, // Prevents division by zero
                 onChanged: (v) => onChanged(v.toInt().toString()),
               ),
             ),
@@ -1783,11 +1837,8 @@ class _InputsTabState extends State<InputsTab> {
       children: [
         _buildInput(
           "Expected Exit Price (Base) *",
-          widget.userSelections['selectedExitPrice'],
-          (v) {
-            widget.userSelections['selectedExitPrice'] = v;
-            widget.onDataChanged();
-          },
+          controller.userSelections['selectedExitPrice'],
+          (v) => controller.updateSelection('selectedExitPrice', v),
           prefix: "₹",
           hint: "e.g. 6000",
           controller: _exitPriceCtrl,
@@ -1805,7 +1856,7 @@ class _InputsTabState extends State<InputsTab> {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: (widget.userSelections['scenarioExitPrices'] as List)
+          children: (controller.userSelections['scenarioExitPrices'] as List)
               .asMap()
               .entries
               .map((entry) {

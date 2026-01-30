@@ -1,11 +1,16 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // ✅ REQUIRED for SystemChrome
+import 'package:property_analyzer_mobile/controller/property_controller.dart';
 import 'package:property_analyzer_mobile/pages/pcm.dart';
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
 
-void main() {
+void main() async {
   // ✅ FIX 1: Add parenthesis and setup System UI for Full Screen
   WidgetsFlutterBinding.ensureInitialized();
+  await GetStorage.init();
+  Get.put(PropertyController());
 
   // This forces the app to fill the screen (including behind the status bar)
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -56,7 +61,7 @@ class _PropertyAnalyzerAppState extends State<PropertyAnalyzerApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return GetMaterialApp(
       title: 'Property Investment Analyzer',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
@@ -115,7 +120,7 @@ class MainLayout extends StatelessWidget {
           isDarkMode: isDarkMode,
         ),
         // We set the height of the toolbar to 0 because flexibleSpace handles it
-        toolbarHeight: isMobile ? 70 : 90,
+        toolbarHeight: isMobile ? 56 : 75,
       ),
 
       body: Container(
@@ -132,7 +137,7 @@ class MainLayout extends StatelessWidget {
         // ✅ FIX 4: Add top padding to body so content doesn't hide behind the header
         // We use kToolbarHeight + padding to push the content down correctly
         child: Padding(
-          padding: EdgeInsets.only(top: isMobile ? 90 : 110),
+          padding: EdgeInsets.only(top: isMobile ? 80 : 100),
           child: const PropertyComparisonPage(),
         ),
       ),

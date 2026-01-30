@@ -238,7 +238,7 @@ class _PropertyComparisonMobileState extends State<PropertyComparisonMobile> {
               ),
 
               // Tab 2: DETAILS
-              DetailsTab(results: _results),
+              DetailsTab(),
             ],
           ),
 
