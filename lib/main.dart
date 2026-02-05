@@ -5,6 +5,7 @@ import 'package:flutter/services.dart'; // ✅ REQUIRED for SystemChrome
 import 'package:property_analyzer_mobile/controller/auth_controller.dart';
 import 'package:property_analyzer_mobile/controller/property_controller.dart';
 import 'package:property_analyzer_mobile/pages/pcm.dart';
+import 'package:property_analyzer_mobile/pages/saved_properties.dart';
 import 'package:property_analyzer_mobile/pages/login_page.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
@@ -148,7 +149,7 @@ class GlassHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final themeController = Get.find<ThemeController>();
-    final authController = Get.find<AuthController>(); // ✅ Access Auth Data
+    final authController = Get.find<AuthController>();
 
     return ClipRRect(
       child: BackdropFilter(
@@ -213,7 +214,25 @@ class GlassHeader extends StatelessWidget {
                     // --- RIGHT SIDE ICONS ---
                     Row(
                       children: [
-                        // 1. Theme Toggle
+                        // ✅ 1. NEW: SAVED PROPERTIES BUTTON
+                        IconButton(
+                          icon: const Icon(
+                            Icons.folder_open,
+                            color: Colors.white,
+                          ),
+                          tooltip: "My Properties",
+                          onPressed: () {
+                            // Navigate to the Saved Screen
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => SavedPropertiesScreen(),
+                              ),
+                            );
+                          },
+                        ),
+
+                        // 2. Theme Toggle (Existing)
                         IconButton(
                           icon: Icon(
                             themeController.isDarkMode.value
@@ -226,9 +245,7 @@ class GlassHeader extends StatelessWidget {
 
                         const SizedBox(width: 8),
 
-                        // ... inside GlassHeader build() ...
-
-                        // 2. ✅ USER DROPDOWN MENU
+                        // 3. User Dropdown (Existing)
                         Container(
                           height: 36,
                           width: 36,
@@ -258,14 +275,11 @@ class GlassHeader extends StatelessWidget {
                               final email = user?.email ?? 'No Email';
                               final name =
                                   user?.displayName ?? email.split('@')[0];
-
-                              // ✅ Check Verification Status
                               final isVerified = user?.emailVerified ?? false;
 
                               return [
-                                // ROW 1 & 2: User Info + BADGE
                                 PopupMenuItem<String>(
-                                  enabled: false, // Static item
+                                  enabled: false,
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
@@ -293,8 +307,6 @@ class GlassHeader extends StatelessWidget {
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                       const SizedBox(height: 8),
-
-                                      // ✅ THE VERIFICATION BADGE
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 8,
@@ -345,13 +357,10 @@ class GlassHeader extends StatelessWidget {
                                     ],
                                   ),
                                 ),
-
                                 const PopupMenuDivider(
                                   color: Colors.grey,
                                   thickness: 1,
                                 ),
-
-                                // ROW 3: Sign Out
                                 const PopupMenuItem<String>(
                                   value: 'logout',
                                   child: Row(

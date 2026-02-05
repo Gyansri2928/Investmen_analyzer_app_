@@ -11,6 +11,7 @@ class PropertyController extends GetxController {
   // 2. OBSERVABLE STATE
   // =========================================================
   var propertyData = <String, dynamic>{}.obs;
+  RxInt formVersion = 0.obs;
 
   var userSelections = <String, dynamic>{
     'selectedPropertyId': 1,
@@ -32,13 +33,9 @@ class PropertyController extends GetxController {
   }
 
   void loadData() {
-    print("📦 STORAGE: Attempting to load data...");
-
     // 1. Read the raw strings once
     String? propJson = box.read('propertyData');
     String? selectJson = box.read('userSelections');
-
-    print("📦 STORAGE: Found Property JSON? ${propJson != null}");
 
     // 2. Handle Property Data
     if (propJson != null) {
@@ -55,16 +52,12 @@ class PropertyController extends GetxController {
         }
 
         propertyData.assignAll(decodedProp);
-        print("✅ STORAGE: Property Data Loaded!");
       } catch (e) {
         print("❌ STORAGE ERROR (Property): $e");
         // Optional: If data is corrupt, you might want to reset memory here too
         // _resetMemoryState();
       }
     } else {
-      print(
-        "⚠️ STORAGE: No property data found. Using defaults (Memory Only).",
-      );
       // ✅ FIX 1: Use internal reset that DOES NOT save to disk immediately
       _resetMemoryState();
     }
@@ -73,7 +66,6 @@ class PropertyController extends GetxController {
     if (selectJson != null) {
       try {
         userSelections.assignAll(jsonDecode(selectJson));
-        print("✅ STORAGE: User Selections Loaded!");
       } catch (e) {
         print("❌ STORAGE ERROR (Selections): $e");
       }
@@ -93,12 +85,10 @@ class PropertyController extends GetxController {
 
   // SAVE DATA
   void saveData() {
-    print("💾 STORAGE: Saving data...");
     try {
       // ✅ FIX: Use jsonEncode on the RxMap directly
       box.write('propertyData', jsonEncode(propertyData));
       box.write('userSelections', jsonEncode(userSelections));
-      print("✅ STORAGE: Save Complete!");
     } catch (e) {
       print("❌ STORAGE SAVE ERROR: $e");
     }

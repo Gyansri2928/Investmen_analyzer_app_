@@ -6,29 +6,23 @@ import 'package:property_analyzer_mobile/pages/monthlybreakdown.dart';
 import 'package:property_analyzer_mobile/pages/idc_schedule.dart';
 
 class DetailsTab extends StatelessWidget {
-  // ✅ No constructor parameters needed anymore
-  const DetailsTab({super.key});
+  const DetailsTab({super.key, this.results});
 
-  // --- HELPERS FOR FORMATTING (INDIAN STYLE) ---
+  final Map<String, dynamic>? results;
+
+  // --- HELPERS ---
   String _formatCurrency(dynamic value) {
     if (value == null) return "₹0";
     double val = double.tryParse(value.toString()) ?? 0;
     String result = val.toStringAsFixed(0);
-
     if (result.length <= 3) return "₹$result";
-
     String lastThree = result.substring(result.length - 3);
     String otherNumbers = result.substring(0, result.length - 3);
-
-    if (otherNumbers.isNotEmpty) {
-      lastThree = ',$lastThree';
-    }
-
+    if (otherNumbers.isNotEmpty) lastThree = ',$lastThree';
     String formattedLeft = otherNumbers.replaceAllMapped(
       RegExp(r'\B(?=(\d{2})+(?!\d))'),
-      (Match m) => ",",
+      (m) => ",",
     );
-
     return "₹$formattedLeft$lastThree";
   }
 
@@ -40,24 +34,22 @@ class DetailsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Access Controller
     final controller = Get.find<PropertyController>();
 
-    // 2. Theme Variables
+    // Theme Variables
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E293B) : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black87;
     final subTextColor = isDark ? Colors.grey.shade400 : Colors.grey;
     final borderColor = isDark ? Colors.white10 : Colors.grey.shade200;
-    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.3 : 0.05);
+    final shadowColor = Colors.black.withOpacity(isDark ? 0.3 : 0.05);
 
-    // 3. Reactive UI
     return Obx(() {
-      // ✅ Get latest results directly from controller
-      final results = controller.results;
+      final rootData = results ?? controller.results;
+      final breakdown =
+          rootData['detailedBreakdown'] as Map<String, dynamic>? ?? {};
 
-      // 4. Empty State
-      if (results.isEmpty || (results['totalCost'] ?? 0) == 0) {
+      if (breakdown.isEmpty || (breakdown['totalCost'] ?? 0) == 0) {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(32.0),
@@ -67,7 +59,7 @@ class DetailsTab extends StatelessWidget {
                 Icon(
                   Icons.assignment_late_outlined,
                   size: 64,
-                  color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                  color: subTextColor,
                 ),
                 const SizedBox(height: 20),
                 Text(
@@ -78,34 +70,50 @@ class DetailsTab extends StatelessWidget {
                     color: subTextColor,
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  "Please enter property details in the Inputs tab to generate this report.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: subTextColor),
-                ),
               ],
             ),
           ),
         );
       }
 
-      // ✅ Safe extraction for variables used in UI and Navigation
-      final Map assumptions = results['assumptions'] ?? {};
+      final String safeStartMode = breakdown['homeLoanStartMode'] ?? 'default';
+      double getVal(String key) =>
+          double.tryParse(breakdown[key]?.toString() ?? '0') ?? 0;
+      // Home Loan Outstanding
+      double hlPrincipal = getVal('homeLoanAmount');
+      double hlPaid = getVal('homeLoanEMIPaid');
+      double hlInterest = getVal('homeLoanInterestPaid');
+      double hlOutstanding = (hlPrincipal - (hlPaid - hlInterest)).clamp(
+        0,
+        double.infinity,
+      );
 
-      final String safeStartMode =
-          results['homeLoanStartMode'] ??
-          assumptions['homeLoanStartMode'] ??
-          'default';
+      // PL1 Outstanding
+      double pl1Principal = getVal('personalLoan1Amount');
+      double pl1Paid = getVal('personalLoan1EMIPaid');
+      double pl1Interest = getVal('personalLoan1InterestPaid');
+      double pl1Outstanding = (pl1Principal - (pl1Paid - pl1Interest)).clamp(
+        0,
+        double.infinity,
+      );
 
-      final dynamic safeStartMonth =
-          results['homeLoanStartMonth'] ?? assumptions['homeLoanStartMonth'];
+      // PL2 Outstanding
+      double pl2Principal = getVal('personalLoan2Amount');
+      double pl2Paid = getVal('personalLoan2EMIPaid');
+      double pl2Interest = getVal('personalLoan2InterestPaid');
+      double pl2Outstanding = (pl2Principal - (pl2Paid - pl2Interest)).clamp(
+        0,
+        double.infinity,
+      );
+
+      // Total Outstanding (Sum of calculated)
+      double totalOutstanding = hlOutstanding + pl1Outstanding + pl2Outstanding;
 
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // 1. Header Section
+            // Header
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -122,7 +130,7 @@ class DetailsTab extends StatelessWidget {
                       35,
                       77,
                       145,
-                    ).withValues(alpha: 0.1),
+                    ).withOpacity(0.1),
                     child: Icon(
                       Icons.calculate,
                       color: AppColors.headerLightEnd,
@@ -152,34 +160,12 @@ class DetailsTab extends StatelessWidget {
 
             const SizedBox(height: 20),
 
-            // 2. Monthly EMI Timeline
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.only(left: 10, top: 5, bottom: 5),
-                decoration: BoxDecoration(
-                  border: Border(
-                    left: BorderSide(color: AppColors.headerLightEnd, width: 4),
-                  ),
-                ),
-                child: Text(
-                  "EMI Timeline",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.headerLightEnd,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 15),
-
-            // --- TIMELINE 1 CARD ---
+            // --- TIMELINE 1 CARD (KEPT AS REQUESTED) ---
             _buildTimelineAccordion(
               title: "Timeline 1: Pre-Possession",
               subtitle:
-                  "Month 0 - ${results['possessionMonths']} (Construction)",
-              amount: _formatCurrency(results['prePossessionTotal']),
+                  "Month 0 - ${breakdown['possessionMonths']} (Construction)",
+              amount: _formatCurrency(breakdown['prePossessionTotal']),
               color: Colors.blue,
               icon: Icons.hourglass_top,
               context: context,
@@ -187,22 +173,19 @@ class DetailsTab extends StatelessWidget {
                 children: [
                   _buildRow(
                     "Personal Loan 1 EMI",
-                    "${_formatCurrency(results['personalLoan1EMI'])}/mo",
+                    "${_formatCurrency(breakdown['personalLoan1EMI'])}/mo",
                     textColor: textColor,
                     subTextColor: subTextColor,
                   ),
-                  if ((results['monthlyIDCEMI'] ?? 0) > 0)
+                  if ((breakdown['monthlyIDCEMI'] ?? 0) > 0)
                     _buildRow(
                       "Avg. IDC Interest",
-                      "${_formatCurrency(results['monthlyIDCEMI'])}/mo",
+                      "${_formatCurrency(breakdown['monthlyIDCEMI'])}/mo",
                       valueColor: Colors.orange,
                       textColor: textColor,
                       subTextColor: subTextColor,
                     ),
-
                   const SizedBox(height: 20),
-
-                  // 2. BUTTON: View Construction Schedule
                   if (safeStartMode != 'manual')
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
@@ -214,21 +197,13 @@ class DetailsTab extends StatelessWidget {
                               context,
                               MaterialPageRoute(
                                 builder: (context) => IdcSchedulePage(
-                                  // Passing params for compatibility
                                   params: {
-                                    'idcSchedule': results['idcSchedule'] ?? [],
-                                    'pl1EMI': results['personalLoan1EMI'],
-                                    'possessionMonths':
-                                        results['possessionMonths'],
-                                    'homeLoanAmount': results['homeLoanAmount'],
-                                    'totalHoldingMonths':
-                                        results['totalHoldingMonths'],
-                                    'lastBankDisbursementMonth':
-                                        results['lastBankDisbursementMonth'] ??
-                                        assumptions['lastBankDisbursementMonth'],
-                                    'interestRate': results['homeLoanRate'],
-                                    'homeLoanStartMode': safeStartMode,
-                                    'manualStartMonth': safeStartMonth,
+                                    'idcReport': breakdown['idcReport'],
+                                    'pl1EMI': breakdown['personalLoan1EMI'],
+                                    'interestRate':
+                                        controller
+                                            .propertyData['assumptions']['homeLoanRate'] ??
+                                        9.0,
                                   },
                                 ),
                               ),
@@ -244,44 +219,21 @@ class DetailsTab extends StatelessWidget {
                         ),
                       ),
                     ),
-
-                  const SizedBox(height: 10),
-
-                  // 3. BUTTON: View Monthly Ledger
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: () {
-                        // Extract Rate Safely
-                        final double safeRate =
-                            double.tryParse(
-                              (results['homeLoanRate'] ??
-                                      assumptions['homeLoanRate'] ??
-                                      9.0)
-                                  .toString(),
-                            ) ??
-                            9.0;
-
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) => MonthlyBreakdownPage(
                               params: {
-                                'idcSchedule': results['idcSchedule'] ?? [],
-                                'pl1EMI': results['personalLoan1EMI'],
-                                'possessionMonths': results['possessionMonths'],
-                                'homeLoanAmount': results['homeLoanAmount'],
+                                'monthlyLedger': breakdown['monthlyLedger'],
                                 'propertyName': "Property",
-                                'interestRate': safeRate,
-                                'homeLoanTerm':
-                                    results['homeLoanTerm'] ??
-                                    assumptions['homeLoanTerm'],
-                                'lastBankDisbursementMonth':
-                                    results['lastBankDisbursementMonth'] ??
-                                    assumptions['lastBankDisbursementMonth'],
-                                'fullHomeLoanEMI': results['homeLoanEMI'],
+                                'homeLoanAmount': breakdown['homeLoanAmount'],
                                 'homeLoanStartMode': safeStartMode,
-                                'manualStartMonth': safeStartMonth,
+                                'possessionMonths':
+                                    breakdown['possessionMonths'],
                               },
                             ),
                           ),
@@ -302,23 +254,22 @@ class DetailsTab extends StatelessWidget {
             ),
             const SizedBox(height: 10),
 
-            // --- TIMELINE 2 LOGIC ---
+            // --- TIMELINE 2 CARD (KEPT AS REQUESTED) ---
             Builder(
               builder: (context) {
                 int postMonths =
                     (double.tryParse(
-                              results['postPossessionMonths'].toString(),
+                              breakdown['postPossessionMonths'].toString(),
                             ) ??
                             0)
                         .toInt();
-                // CASE A: Standard Scenario
                 if (postMonths > 0) {
                   return _buildTimelineAccordion(
                     title: "Timeline 2: Post-Possession",
                     subtitle:
-                        "Month ${results['possessionMonths'] + 1} - ${results['totalHoldingMonths']}",
+                        "Month ${breakdown['possessionMonths'] + 1} - ${breakdown['totalHoldingMonths']}",
                     amount:
-                        "${_formatCurrency(results['postPossessionEMI'])}/mo",
+                        "${_formatCurrency(breakdown['postPossessionEMI'])}/mo",
                     color: Colors.green,
                     icon: Icons.check_circle_outline,
                     context: context,
@@ -326,36 +277,34 @@ class DetailsTab extends StatelessWidget {
                       children: [
                         _buildRow(
                           "Home Loan EMI",
-                          _formatCurrency(results['homeLoanEMI']),
+                          _formatCurrency(breakdown['homeLoanEMI']),
                           textColor: textColor,
                           subTextColor: subTextColor,
                         ),
-                        if ((results['personalLoan1EMI'] ?? 0) > 0)
+                        if ((breakdown['personalLoan1EMI'] ?? 0) > 0)
                           _buildRow(
                             "PL1 EMI",
-                            _formatCurrency(results['personalLoan1EMI']),
+                            _formatCurrency(breakdown['personalLoan1EMI']),
                             textColor: textColor,
                             subTextColor: subTextColor,
                           ),
-                        if ((results['personalLoan2EMI'] ?? 0) > 0)
+                        if ((breakdown['personalLoan2EMI'] ?? 0) > 0)
                           _buildRow(
                             "PL2 EMI",
-                            _formatCurrency(results['personalLoan2EMI']),
+                            _formatCurrency(breakdown['personalLoan2EMI']),
                             textColor: textColor,
                             subTextColor: subTextColor,
                           ),
                         _buildRow(
-                          "Total Paid in Phase 2",
-                          _formatCurrency(results['postPossessionTotal']),
+                          "Total Cash Paid in Phase 2",
+                          _formatCurrency(breakdown['postPossessionTotal']),
                           textColor: textColor,
                           subTextColor: subTextColor,
                         ),
                       ],
                     ),
                   );
-                }
-                // CASE B: Early Exit
-                else {
+                } else {
                   return Container(
                     width: double.infinity,
                     margin: const EdgeInsets.only(bottom: 16),
@@ -381,15 +330,6 @@ class DetailsTab extends StatelessWidget {
                             color: Colors.grey.shade600,
                           ),
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          "Holding period ends before possession.\nNo post-possession payments.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade500,
-                          ),
-                        ),
                       ],
                     ),
                   );
@@ -397,291 +337,131 @@ class DetailsTab extends StatelessWidget {
               },
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 30),
 
-            // 3. IDC Summary
-            if ((results['totalIDC'] ?? 0) > 0)
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: borderColor),
-                  boxShadow: [BoxShadow(color: shadowColor, blurRadius: 8)],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.construction, size: 18, color: textColor),
-                        const SizedBox(width: 8),
-                        Text(
-                          "IDC Summary",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: textColor,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        _buildStatCard(
-                          "Avg Monthly",
-                          _formatCurrency(results['monthlyIDCEMI']),
-                          "",
-                          Colors.blue,
-                          textColor,
-                        ),
-                        const SizedBox(width: 10),
-                        _buildStatCard(
-                          "Total Interest",
-                          _formatCurrency(results['totalIDC']),
-                          "Construction Phase",
-                          Colors.red,
-                          textColor,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+            // --- ⬇️ NEW SECTION: DETAILED COMPONENT BREAKDOWN (REPLACES OLD CARDS) ⬇️ ---
 
-            const SizedBox(height: 20),
-
-            // 4. Loan Analysis
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.only(left: 10, top: 5, bottom: 5),
-                decoration: BoxDecoration(
-                  border: Border(
-                    left: BorderSide(color: AppColors.headerLightEnd, width: 4),
-                  ),
-                ),
-                child: Text(
-                  "Loan Analysis",
+            // Header Label
+            Row(
+              children: [
+                Text(
+                  "FINANCIAL COMPONENTS",
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.headerLightEnd,
+                    color: subTextColor,
+                    letterSpacing: 1.0,
                   ),
                 ),
-              ),
+              ],
             ),
             const SizedBox(height: 15),
 
-            // Home Loan Breakdown
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: borderColor),
-                boxShadow: [BoxShadow(color: shadowColor, blurRadius: 8)],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "HOME LOAN BREAKDOWN",
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: subTextColor,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      _buildStatCard(
-                        "EMI Amount",
-                        _formatCurrency(results['homeLoanEMI']),
-                        "Monthly",
-                        Colors.blue,
-                        textColor,
-                      ),
-                      const SizedBox(width: 10),
-                      _buildStatCard(
-                        "Total Paid",
-                        _formatCurrency(results['totalEMIPaid']),
-                        "Principal + Int",
-                        Colors.green,
-                        textColor,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      _buildStatCard(
-                        "Interest Only",
-                        _formatCurrency(results['totalInterestPaid']),
-                        "Cost of Loan",
-                        Colors.orange,
-                        textColor,
-                      ),
-                      const SizedBox(width: 10),
-                      _buildStatCard(
-                        "Balance Due",
-                        _formatCurrency(results['totalLoanOutstanding']),
-                        "To Close",
-                        Colors.red,
-                        textColor,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // 5. Final Summaries
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: borderColor),
-                boxShadow: [BoxShadow(color: shadowColor, blurRadius: 8)],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        "Total Interest Cost",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: textColor,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade100,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          "${results['years']} Years",
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.orange.shade800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    _formatLakhs(results['totalInterestPaid']),
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: textColor,
-                    ),
-                  ),
-                  if ((results['totalIDC'] ?? 0) > 0)
-                    Text(
-                      "Includes construction interest",
-                      style: TextStyle(fontSize: 12, color: subTextColor),
-                    ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.green.withValues(alpha: 0.3)
-                      : Colors.green.shade100,
-                  width: 2,
+            // 1. IDC Component
+            if ((breakdown['totalIDC'] ?? 0) > 0)
+              _buildBreakdownCard(
+                context,
+                title: "IDC Component",
+                subtitle: "Interest During Construction",
+                icon: Icons.calculate,
+                iconColor: Colors.amber,
+                monthlyVal: _formatCurrency(breakdown['monthlyIDCEMI']),
+                monthlyLabel: "Avg Monthly",
+                totalVal: _formatLakhs(breakdown['totalIDC']),
+                interestVal: "100%",
+                balanceVal: _formatLakhs(
+                  (breakdown['homeLoanAmount'] ?? 0) +
+                      (breakdown['totalIDC'] ?? 0),
                 ),
-                boxShadow: [BoxShadow(color: shadowColor, blurRadius: 8)],
+                balanceLabel: "Final Loan Bal",
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        "Projected Cash Exit",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: textColor,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade100,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          "@ ₹${results['exitPrice']}",
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    _formatLakhs(results['leftoverCash']),
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                  Text(
-                    "Cash in hand after loan closure",
-                    style: TextStyle(fontSize: 12, color: subTextColor),
-                  ),
-                ],
+
+            // 2. Home Loan
+            _buildBreakdownCard(
+              context,
+              title: "Home Loan",
+              subtitle: "Principal + Interest",
+              icon: Icons.account_balance,
+              iconColor: Colors.blue,
+              monthlyVal: _formatCurrency(breakdown['homeLoanEMI']),
+              monthlyLabel: "EMI",
+              totalVal: _formatLakhs(hlPaid),
+              interestVal: _formatLakhs(hlInterest),
+              balanceVal: _formatLakhs(hlOutstanding),
+              balanceLabel: "Outstanding",
+            ),
+
+            // 3. Personal Loan 1
+            if ((breakdown['personalLoan1EMI'] ?? 0) > 0)
+              _buildBreakdownCard(
+                context,
+                title: "Personal Loan 1",
+                subtitle: "Secondary Funding",
+                icon: Icons.money,
+                iconColor: Colors.green,
+                monthlyVal: _formatCurrency(breakdown['personalLoan1EMI']),
+                monthlyLabel: "EMI",
+                totalVal: _formatLakhs(breakdown['personalLoan1EMIPaid']),
+                interestVal: _formatLakhs(
+                  breakdown['personalLoan1InterestPaid'],
+                ),
+                balanceVal: _formatLakhs(pl1Outstanding),
+                balanceLabel: "Outstanding",
               ),
+
+            // 4. Personal Loan 2
+            if ((breakdown['personalLoan2EMI'] ?? 0) > 0)
+              _buildBreakdownCard(
+                context,
+                title: "Personal Loan 2",
+                subtitle: "Additional Funding",
+                icon: Icons.wallet,
+                iconColor: Colors.orange,
+                monthlyVal: _formatCurrency(breakdown['personalLoan2EMI']),
+                monthlyLabel: "EMI",
+                totalVal: _formatLakhs(breakdown['personalLoan2EMIPaid']),
+                interestVal: _formatLakhs(
+                  breakdown['personalLoan2InterestPaid'],
+                ),
+                balanceVal: _formatLakhs(pl2Outstanding),
+                balanceLabel: "Outstanding",
+              ),
+
+            // 5. TOTAL SUMMARY (Highlighted)
+            _buildBreakdownCard(
+              context,
+              title: "Total Summary",
+              subtitle: "All Active Loans",
+              icon: Icons.summarize,
+              iconColor: Colors.white,
+              iconBg: isDark ? Colors.white10 : Colors.black87,
+              monthlyVal: _formatCurrency(breakdown['postPossessionEMI']),
+              monthlyLabel: "Total Monthly",
+              totalVal: _formatLakhs(breakdown['totalEMIPaid']),
+              interestVal: _formatLakhs(breakdown['totalInterestPaid']),
+              balanceVal: _formatLakhs(breakdown['totalLoanOutstanding']),
+              balanceLabel: "To Clear",
+              isTotal: true,
             ),
 
             const SizedBox(height: 20),
 
-            // 6. Net Profit Banner
+            // Net Profit Banner (Kept for final result context)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: (results['netGainLoss'] ?? 0) >= 0
+                color: (breakdown['netGainLoss'] ?? 0) >= 0
                     ? Colors.green
                     : Colors.red,
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
                     color:
-                        ((results['netGainLoss'] ?? 0) >= 0
+                        ((breakdown['netGainLoss'] ?? 0) >= 0
                                 ? Colors.green
                                 : Colors.red)
-                            .withValues(alpha: 0.3),
+                            .withOpacity(0.3),
                     blurRadius: 10,
                     offset: const Offset(0, 5),
                   ),
@@ -692,7 +472,7 @@ class DetailsTab extends StatelessWidget {
                   Text(
                     "NET POSITION",
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.8),
+                      color: Colors.white.withOpacity(0.8),
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
@@ -700,7 +480,7 @@ class DetailsTab extends StatelessWidget {
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    _formatLakhs(results['netGainLoss']),
+                    _formatLakhs(breakdown['netGainLoss']),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 32,
@@ -714,11 +494,11 @@ class DetailsTab extends StatelessWidget {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
+                      color: Colors.white.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      (results['netGainLoss'] ?? 0) >= 0 ? "PROFIT" : "LOSS",
+                      (breakdown['netGainLoss'] ?? 0) >= 0 ? "PROFIT" : "LOSS",
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 12,
@@ -729,7 +509,6 @@ class DetailsTab extends StatelessWidget {
                 ],
               ),
             ),
-
             const SizedBox(height: 100),
           ],
         ),
@@ -737,8 +516,166 @@ class DetailsTab extends StatelessWidget {
     });
   }
 
-  // --- HELPERS (Theme Aware) ---
+  // --- HELPERS ---
 
+  // 1. New Helper: Detailed Breakdown Card (Table Row Replacement)
+  Widget _buildBreakdownCard(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color iconColor,
+    Color? iconBg,
+    required String monthlyVal,
+    required String monthlyLabel,
+    required String totalVal,
+    required String interestVal,
+    required String balanceVal,
+    required String balanceLabel,
+    bool isTotal = false,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E293B) : Colors.white;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: isTotal
+            ? Border.all(color: Colors.blue.withOpacity(0.5), width: 1.5)
+            : Border.all(color: isDark ? Colors.white10 : Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Top Row: Icon and Title
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: iconBg ?? iconColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(icon, color: iconColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isDark ? Colors.grey.shade400 : Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      monthlyLabel,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: isDark ? Colors.grey : Colors.grey.shade600,
+                      ),
+                    ),
+                    Text(
+                      monthlyVal,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          Divider(
+            height: 1,
+            color: isDark ? Colors.white10 : Colors.grey.shade100,
+          ),
+
+          // Bottom Row: 3 Column Stats
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildCompactStat("Total Cash Paid", totalVal, isDark),
+                _buildCompactStat(
+                  "Interest",
+                  interestVal,
+                  isDark,
+                  valueColor: Colors.orange.shade700,
+                ),
+                _buildCompactStat(
+                  balanceLabel,
+                  balanceVal,
+                  isDark,
+                  valueColor: Colors.red.shade400,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactStat(
+    String label,
+    String value,
+    bool isDark, {
+    Color? valueColor,
+  }) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            color: isDark ? Colors.grey : Colors.grey.shade600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: valueColor ?? (isDark ? Colors.white70 : Colors.black87),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 2. Existing Helpers
   Widget _buildTimelineAccordion({
     required String title,
     required String subtitle,
@@ -751,12 +688,12 @@ class DetailsTab extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E293B) : Colors.white;
     final borderColor = isDark
-        ? color.withValues(alpha: 0.5)
-        : color.withValues(alpha: 0.3);
+        ? color.withOpacity(0.5)
+        : color.withOpacity(0.3);
     final expandedColor = isDark
-        ? Colors.white.withValues(alpha: 0.05)
+        ? Colors.white.withOpacity(0.05)
         : Colors.grey.shade50;
-    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.3 : 0.05);
+    final shadowColor = Colors.black.withOpacity(isDark ? 0.3 : 0.05);
 
     return Container(
       decoration: BoxDecoration(
@@ -859,17 +796,14 @@ class DetailsTab extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
+          color: color.withOpacity(0.1),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
           children: [
             Text(
               label,
-              style: TextStyle(
-                fontSize: 10,
-                color: color.withValues(alpha: 0.8),
-              ),
+              style: TextStyle(fontSize: 10, color: color.withOpacity(0.8)),
             ),
             const SizedBox(height: 4),
             Text(
@@ -883,10 +817,7 @@ class DetailsTab extends StatelessWidget {
             if (subtext.isNotEmpty)
               Text(
                 subtext,
-                style: TextStyle(
-                  fontSize: 8,
-                  color: color.withValues(alpha: 0.6),
-                ),
+                style: TextStyle(fontSize: 8, color: color.withOpacity(0.6)),
               ),
           ],
         ),

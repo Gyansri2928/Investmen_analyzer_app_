@@ -1,8 +1,11 @@
 import 'dart:math';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert'; // ✅ Required for jsonEncode/jsonDecode
 import 'package:flutter/material.dart';
-import 'package:get/get.dart'; // Import Get
-import 'package:property_analyzer_mobile/controller/property_controller.dart'; // Import Controller
-import '../main.dart'; // For AppColors
+import 'package:get/get.dart';
+import 'package:property_analyzer_mobile/controller/property_controller.dart';
+import '../main.dart'; // For AppColors (Ensure this exists in your project)
+import '../service/portfolio_service.dart';
 
 class InputsTab extends StatefulWidget {
   final Map<String, dynamic> propertyData;
@@ -34,7 +37,6 @@ class _InputsTabState extends State<InputsTab> {
   @override
   void initState() {
     super.initState();
-    // Initialize with existing value
     _exitPriceCtrl = TextEditingController(
       text: controller.userSelections['selectedExitPrice']?.toString(),
     );
@@ -42,18 +44,14 @@ class _InputsTabState extends State<InputsTab> {
 
   @override
   void dispose() {
-    _exitPriceCtrl.dispose(); // Clean up
+    _exitPriceCtrl.dispose();
     super.dispose();
   }
 
-  // ✅ HELPER: Removes ".0" if the number is whole (24.0 -> "24")
   String _formatValue(dynamic value) {
     if (value == null) return '';
     if (value is double) {
-      // If the number has no decimal part, convert to int string
-      if (value % 1 == 0) {
-        return value.toInt().toString();
-      }
+      if (value % 1 == 0) return value.toInt().toString();
     }
     return value.toString();
   }
@@ -73,7 +71,6 @@ class _InputsTabState extends State<InputsTab> {
   }
 
   void _autoPopulateExitPrice() {
-    // Read from controller
     double purchasePrice =
         double.tryParse(controller.propertyData['purchasePrice'].toString()) ??
         0;
@@ -101,7 +98,6 @@ class _InputsTabState extends State<InputsTab> {
       double calculatedExit = purchasePrice + increment;
       String newVal = calculatedExit.toStringAsFixed(0);
 
-      // ✅ Update Controller & UI
       controller.updateSelection('selectedExitPrice', newVal);
       _exitPriceCtrl.text = newVal;
     }
@@ -123,27 +119,17 @@ class _InputsTabState extends State<InputsTab> {
             ),
             TextButton(
               onPressed: () {
-                // 1. Reset the Data in GetX
                 controller.resetToDefaults();
-
-                // 2. Reset the UI State
                 setState(() {
                   _currentStep = 1;
                   _maxStepReached = 1;
-
-                  // ✅ FIX: Manually clear the persistent text controller
                   _exitPriceCtrl.clear();
-
-                  // Optional: if you have other internal UI flags, reset them here
                   _activeAccordion = 'prop_mgmt';
                 });
-
                 Navigator.of(ctx).pop();
-
                 Get.snackbar(
                   "Reset Successful",
                   "All inputs have been cleared.",
-                  snackPosition: SnackPosition.BOTTOM,
                   backgroundColor: Colors.green.withOpacity(0.8),
                   colorText: Colors.white,
                 );
@@ -158,8 +144,6 @@ class _InputsTabState extends State<InputsTab> {
 
   void _addProperty() {
     List<dynamic> props = controller.propertyData['properties'];
-
-    // ... (Your maxId logic is correct) ...
     int maxId = 0;
     if (props.isNotEmpty) {
       maxId = props.fold<int>(0, (prev, element) {
@@ -169,7 +153,6 @@ class _InputsTabState extends State<InputsTab> {
     }
     int newId = maxId + 1;
 
-    // 1. Add to the list
     props.add({
       'id': newId,
       'size': '1000',
@@ -180,7 +163,8 @@ class _InputsTabState extends State<InputsTab> {
       'isHighlighted': false,
     });
 
-    controller.updateProperty(newId, 'name', 'Property $newId');
+    controller.propertyData.refresh(); // Trigger GetX update
+    controller.saveData(); // Save to local storage
   }
 
   void _removeProperty(int index) {
@@ -188,20 +172,17 @@ class _InputsTabState extends State<InputsTab> {
     var removedProp = props[index];
     props.removeAt(index);
 
-    // Logic to switch selection if the deleted one was active
     if (controller.userSelections['selectedPropertyId'] == removedProp['id']) {
       if (props.isNotEmpty) {
-        // Direct assignment to controller map
         controller.userSelections['selectedPropertyId'] = props[0]['id'];
         controller.userSelections['selectedPropertySize'] = props[0]['size'];
       }
     }
 
-    // ✅ FIX: Trigger GetX updates manually since we modified the list directly
     controller.propertyData.refresh();
     controller.userSelections.refresh();
-    controller.calculate();
-    controller.saveData(); // Persists to storage
+    // REMOVED: controller.calculate(); (Calculation is now server-side)
+    controller.saveData();
   }
 
   void _addExitScenario() {
@@ -210,7 +191,6 @@ class _InputsTabState extends State<InputsTab> {
           controller.userSelections['selectedExitPrice'].toString(),
         ) ??
         0;
-
     List currentScenarios =
         controller.userSelections['scenarioExitPrices'] as List;
 
@@ -221,14 +201,9 @@ class _InputsTabState extends State<InputsTab> {
           .reduce(max);
     }
 
-    // 1. Add the new price
     currentScenarios.add(maxPrice + 500);
-
-    // ✅ 2. FIX: Tell GetX that the 'userSelections' map has changed internally
     controller.userSelections.refresh();
-
-    // 3. Trigger math and save
-    controller.calculate();
+    // REMOVED: controller.calculate();
     controller.saveData();
   }
 
@@ -236,18 +211,104 @@ class _InputsTabState extends State<InputsTab> {
     List currentScenarios =
         controller.userSelections['scenarioExitPrices'] as List;
     currentScenarios.removeAt(index);
-
-    // ✅ FIX: Tell GetX to refresh the UI
     controller.userSelections.refresh();
-
-    controller.calculate();
+    // REMOVED: controller.calculate();
     controller.saveData();
+  }
+
+  // ✅ UPDATED: Save Logic (No Local Calculation)
+  void _saveToCloud() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      Get.snackbar(
+        "Sign In Required",
+        "Please sign in to save properties.",
+        backgroundColor: Colors.red,
+        colorText: Colors.white,
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // 1. SANITIZE DATA (Fixes the TypeError)
+      // We convert to JSON and back to strip away all GetX internal types
+      final cleanData = jsonDecode(jsonEncode(controller.propertyData));
+      final cleanSelections = jsonDecode(jsonEncode(controller.userSelections));
+
+      // 2. Extract Name & Location
+      List props = cleanData['properties'] ?? [];
+      var activeProp = props.firstWhere(
+        (p) => p['id'] == cleanSelections['selectedPropertyId'],
+        orElse: () => props.isNotEmpty ? props[0] : {},
+      );
+
+      String name = activeProp['name'] ?? "Untitled";
+      String location = activeProp['location'] ?? "Unknown";
+
+      // 3. GET METRICS (Fixes the "Zero Value" issue)
+      // We check if the controller has results from the backend analysis
+      double totalCost = 0;
+      double roi = 0;
+      double netProfit = 0;
+
+      if (controller.results.isNotEmpty &&
+          controller.results['detailedBreakdown'] != null) {
+        final breakdown = controller.results['detailedBreakdown'];
+        // Parse safely from backend response
+        totalCost = double.tryParse(breakdown['totalCost'].toString()) ?? 0;
+        roi = double.tryParse(breakdown['roi'].toString()) ?? 0;
+        netProfit = double.tryParse(breakdown['netGainLoss'].toString()) ?? 0;
+      }
+
+      // 4. Save to Firebase
+      await PortfolioService().saveScenario(
+        name: name,
+        location: location,
+        metrics: {'totalCost': totalCost, 'roi': roi, 'netProfit': netProfit},
+        fullData: cleanData,
+        selections: cleanSelections,
+      );
+
+      if (mounted) {
+        Navigator.pop(context); // Close Loading
+      }
+      Get.snackbar(
+        "Success",
+        "Property saved to Cloud Portfolio!",
+        backgroundColor: Colors.green,
+        colorText: Colors.white,
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close Loading
+      }
+      print("Save Error: $e");
+      Get.snackbar(
+        "Error",
+        "Failed to save: $e",
+        backgroundColor: Colors.red,
+        colorText: Colors.white,
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // Access data here to trigger updates
+      String savedValue =
+          controller.userSelections['selectedExitPrice']?.toString() ?? "";
+      if (savedValue.isNotEmpty && _exitPriceCtrl.text != savedValue) {
+        _exitPriceCtrl.text = savedValue;
+        _exitPriceCtrl.selection = TextSelection.fromPosition(
+          TextPosition(offset: _exitPriceCtrl.text.length),
+        );
+      }
       return SingleChildScrollView(
         padding: const EdgeInsets.only(
           left: 16,
@@ -286,7 +347,7 @@ class _InputsTabState extends State<InputsTab> {
           ],
         ),
       );
-    }); // ✅ Close Obx
+    });
   }
 
   // --- WIDGET HELPERS (UPDATED FOR DARK MODE) ---
@@ -350,18 +411,51 @@ class _InputsTabState extends State<InputsTab> {
               ),
             ],
           ),
-          ElevatedButton(
-            onPressed: _confirmReset,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+          Row(
+            children: [
+              // 1. SAVE BUTTON
+              ElevatedButton.icon(
+                onPressed: _saveToCloud, // Calls the function above
+                icon: const Icon(Icons.cloud_upload, size: 14),
+                label: const Text("Save", style: TextStyle(fontSize: 12)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade700, // Distinct color
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 0,
+                  ),
+                  minimumSize: const Size(0, 32),
+                ),
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-              minimumSize: const Size(0, 32),
-            ),
-            child: const Text("Reset", style: TextStyle(fontSize: 12)),
+
+              const SizedBox(width: 8), // Spacing
+              // 2. RESET BUTTON (Existing)
+              ElevatedButton(
+                onPressed: _confirmReset,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color.fromARGB(
+                    255,
+                    60,
+                    150,
+                    56,
+                  ), // Adjusted to red for Reset (standard UX)
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 0,
+                  ),
+                  minimumSize: const Size(0, 32),
+                ),
+                child: const Text("Reset", style: TextStyle(fontSize: 12)),
+              ),
+            ],
           ),
         ],
       ),
@@ -700,7 +794,6 @@ class _InputsTabState extends State<InputsTab> {
     );
   }
 
-  // --- UPDATED INPUT WIDGET WITH RED STAR SUPPORT ---
   Widget _buildInput(
     String label,
     dynamic value,
@@ -709,83 +802,92 @@ class _InputsTabState extends State<InputsTab> {
     String? hint,
     TextInputType keyboardType = TextInputType.number,
     TextEditingController? controller,
-    bool isRequired = false, // <--- ✅ NEW PARAMETER
+    bool isRequired = false,
+    bool isEnabled = true, // ✅ NEW PARAMETER (Default: true)
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ✅ NEW: RichText allows mixing colors (Gray Text + Red Star)
         RichText(
           text: TextSpan(
             text: label,
             style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              // Dim label if disabled
               color: isDark
                   ? Colors.white70
                   : const Color.fromARGB(255, 58, 56, 56),
-              fontFamily: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.fontFamily, // Uses default font
+              fontFamily: Theme.of(context).textTheme.bodyMedium?.fontFamily,
             ),
             children: [
               if (isRequired)
                 const TextSpan(
                   text: ' *',
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(color: Colors.red),
                 ),
             ],
           ),
         ),
-        const SizedBox(height: 6),
-        SizedBox(
-          height: 40,
-          child: TextFormField(
-            key: ValueKey(
-              "${label}_${Get.find<PropertyController>().results.length}",
-            ),
-            controller: controller,
-            initialValue: controller != null ? null : _formatValue(value),
-            keyboardType: keyboardType,
-            style: TextStyle(
-              fontSize: 13,
-              color: isDark ? Colors.white : Colors.black,
-            ),
-            decoration: InputDecoration(
-              prefixText: prefix,
-              hintText: hint,
-              hintStyle: TextStyle(
-                color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
-                fontSize: 13,
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? Colors.white24 : Colors.grey.shade300,
-                ),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: isDark ? Colors.white24 : Colors.grey.shade300,
-                ),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(
-                  color: AppColors.headerLightEnd,
-                  width: 1.5,
-                ),
-              ),
-            ),
-            onChanged: onChanged,
+        const SizedBox(height: 8),
+        TextFormField(
+          key: ValueKey(
+            "${label}_${Get.find<PropertyController>().formVersion.value}",
           ),
+          controller: controller,
+          initialValue: controller != null ? null : _formatValue(value),
+          keyboardType: keyboardType,
+          enabled: isEnabled, // ✅ DISABLE INPUT HERE
+          style: TextStyle(
+            fontSize: 14,
+            // Dim text if disabled
+            color: isEnabled
+                ? (isDark ? Colors.white : Colors.black87)
+                : (isDark ? Colors.white38 : Colors.grey),
+          ),
+          decoration: InputDecoration(
+            prefixText: prefix,
+            hintText: hint,
+            hintStyle: TextStyle(
+              color: Colors.grey.withOpacity(0.6),
+              fontSize: 13,
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+            filled: true,
+            // Darker background if disabled to indicate "read-only"
+            fillColor: isEnabled
+                ? (isDark
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.shade50)
+                : (isDark ? Colors.black26 : Colors.grey.shade200),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: isDark ? Colors.white10 : Colors.grey.shade200,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: AppColors.headerLightEnd,
+                width: 1.5,
+              ),
+            ),
+            disabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.transparent),
+            ), // Clean look when disabled
+          ),
+          onChanged: onChanged,
         ),
       ],
     );
@@ -1581,10 +1683,9 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Share (%)",
                       assumptions['personalLoan1Share'],
-                      (v) => controller.updateAssumption(
-                        'personalLoan1Share',
-                        v,
-                      ), // ✅ Correct
+                      (v) =>
+                          controller.updateAssumption('personalLoan1Share', v),
+                      isEnabled: false, // ✅ Correct
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1671,10 +1772,9 @@ class _InputsTabState extends State<InputsTab> {
                     child: _buildInput(
                       "Share (%)",
                       assumptions['personalLoan2Share'],
-                      (v) => controller.updateAssumption(
-                        'personalLoan2Share',
-                        v,
-                      ), // ✅ Correct
+                      (v) =>
+                          controller.updateAssumption('personalLoan2Share', v),
+                      isEnabled: false, // ✅ Correct
                     ),
                   ),
                   const SizedBox(width: 10),

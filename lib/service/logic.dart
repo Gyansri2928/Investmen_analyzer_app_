@@ -80,19 +80,16 @@ class PropertyCalculator {
     double yearsInput = getSafeValue(assumptions['investmentPeriod']);
     String unit = assumptions['holdingPeriodUnit'] ?? 'years';
     double totalHoldingMonths = unit == 'months' ? yearsInput : yearsInput * 12;
+    double yearsDisplay = totalHoldingMonths / 12;
 
     double baseCost = size * purchasePrice;
-    double agreementValue = baseCost + otherCharges;
+    double agreementValue = baseCost; // Backend logic uses baseCost for taxes
     double stampDutyCost = agreementValue * (stampDutyPct / 100);
     double gstCost = agreementValue * (gstPct / 100);
     double totalCost = baseCost;
 
     // Loan Shares
-    double hlShare = 80;
-    double pl1Share = 10;
-    double pl2Share = 10;
-    double dpShare = 0;
-
+    double hlShare = 80, pl1Share = 10, pl2Share = 10, dpShare = 0;
     if (paymentPlan == 'clp') {
       hlShare = 80;
       pl1Share = 10;
@@ -172,35 +169,9 @@ class PropertyCalculator {
 
     double pl1StartMonth = getSafeValue(assumptions['personalLoan1StartMonth']);
     double pl2Delay = getSafeValue(assumptions['personalLoan2StartMonth']);
-    double pl2StartMonth = possessionMonths + pl2Delay + 1;
+    double pl2StartMonth = possessionMonths + pl2Delay;
 
-    // --- SIMULATION LOOP ---
-    double interestCutoffMonth = possessionMonths;
-
-    // 1. If Last Disbursement is set, that is the natural cutoff
-    double explicitLast = getSafeValue(
-      assumptions['lastBankDisbursementMonth'],
-    );
-    if (explicitLast > 0) {
-      interestCutoffMonth = explicitLast;
-    }
-
-    // 2. If Manual Mode is ON, interest stops 1 month before EMI starts
-    if (assumptions['homeLoanStartMode'] == 'manual') {
-      double manualMonth = getSafeValue(assumptions['homeLoanStartMonth']);
-      if (manualMonth > 0) {
-        interestCutoffMonth = manualMonth - 1;
-      }
-    }
-    double cumulativeDisbursement = 0;
-    List<Map<String, dynamic>> monthlyLedger = [];
-    double totalIDC = 0;
-    double minIDCEMI = 0;
-    double maxIDCEMI = 0;
-    bool isFirstIDCPayment = false;
-    double runningPrePossessionTotal = 0;
-    double runningPostPossessionTotal = 0;
-
+    // --- IDC GENERATION ---
     List<Map<String, dynamic>> idcSchedule = [];
     double interval = getSafeValue(assumptions['bankDisbursementInterval']);
     if (interval == 0) interval = 3;
@@ -208,81 +179,147 @@ class PropertyCalculator {
     if (startMonth == 0) startMonth = 1;
 
     double fundingEndMonth = lastDemandMonth;
+
+    // Determine Interest Cutoff
+    double interestCutoffMonth = possessionMonths;
+    if (assumptions['lastBankDisbursementMonth'] != null &&
+        getSafeValue(assumptions['lastBankDisbursementMonth']) > 0) {
+      interestCutoffMonth = getSafeValue(
+        assumptions['lastBankDisbursementMonth'],
+      );
+    }
+    if (assumptions['homeLoanStartMode'] == 'manual' &&
+        getSafeValue(assumptions['homeLoanStartMonth']) > 0) {
+      interestCutoffMonth = getSafeValue(assumptions['homeLoanStartMonth']) - 1;
+    }
+
     int slabsCount = ((fundingEndMonth - startMonth) / interval).floor() + 1;
     if (slabsCount < 1) slabsCount = 1;
     double slabAmount = hlAmount > 0 ? hlAmount / slabsCount : 0;
+    double baseSlabInterest = (slabAmount * (hlRate / 100)) / 12;
+
+    double grandTotalInterest = 0;
 
     for (int i = 0; i < slabsCount; i++) {
       double m = startMonth + (i * interval);
       if (m <= fundingEndMonth && hlAmount > 0) {
-        double monthlyInt = (slabAmount * (hlRate / 100)) / 12;
-        double duration = max(0, interestCutoffMonth - m);
+        // Calculate Duration
+        double duration = 0;
+        if (m <= interestCutoffMonth) {
+          duration = max(0, interestCutoffMonth - m + 1);
+        }
+
+        double cumulativeMonthlyInterest = baseSlabInterest * (i + 1);
+        double totalCostForSlab = baseSlabInterest * duration;
+        grandTotalInterest += totalCostForSlab;
+
         idcSchedule.add({
           'slabNo': i + 1,
           'releaseMonth': m,
           'amount': slabAmount,
-          'interestCost': monthlyInt * duration,
+          'duration': duration,
+          'cumulativeMonthlyInterest': cumulativeMonthlyInterest,
+          'totalCostForSlab': totalCostForSlab,
         });
       }
     }
 
-    for (int m = 1; m <= totalHoldingMonths; m++) {
-      double monthlyHLOutflow = 0;
-      bool isPrePossession = m <= possessionMonths;
+    // --- LEDGER GENERATION ---
+    List<Map<String, dynamic>> monthlyLedger = [];
+    double cumulativeDisbursement = 0;
+    double outstandingBalance = 0;
+    double totalIDC = 0;
+    double minIDCEMI = 0;
+    double maxIDCEMI = 0;
+    bool isFirstIDCPayment = false;
+    double runningPrePossessionTotal = 0;
+    double runningPostPossessionTotal = 0;
 
-      if (paymentPlan == 'clp' && hlAmount > 0 && m < realHomeLoanStartMonth) {
-        bool isScheduleMonth =
-            (m >= startMonth) && ((m - startMonth) % interval == 0);
-        if (m <= fundingEndMonth) {
-          if (m == startMonth || (isScheduleMonth && m != startMonth)) {
-            if (cumulativeDisbursement < (hlAmount - 10)) {
-              cumulativeDisbursement += slabAmount;
-              if (cumulativeDisbursement > hlAmount)
-                cumulativeDisbursement = hlAmount;
+    for (int m = 0; m <= possessionMonths; m++) {
+      // Ledger usually goes up to possession or holding
+      double currentDisbursement = 0;
+      double interestForThisMonth = 0;
+      double principalRepaidThisMonth = 0;
+
+      // A. Disbursement
+      if (paymentPlan == 'clp' && hlAmount > 0 && m <= fundingEndMonth) {
+        bool isScheduleMonth = idcSchedule.any((s) => s['releaseMonth'] == m);
+        if (isScheduleMonth && cumulativeDisbursement < (hlAmount - 10)) {
+          currentDisbursement = slabAmount;
+          cumulativeDisbursement += slabAmount;
+          if (assumptions['homeLoanStartMode'] == 'manual') {
+            outstandingBalance += slabAmount;
+          } else {
+            outstandingBalance = cumulativeDisbursement;
+          }
+        }
+      }
+
+      // B. Interest
+      if (outstandingBalance > 0) {
+        interestForThisMonth = (outstandingBalance * (hlRate / 100)) / 12;
+      }
+
+      // C. Payment
+      double hlPayment = 0;
+      bool isFullEMI = false;
+
+      if (hlAmount > 0) {
+        if (m >= realHomeLoanStartMonth) {
+          hlPayment = hlEMI;
+          isFullEMI = true;
+          if (outstandingBalance > 0) {
+            principalRepaidThisMonth = max(0, hlPayment - interestForThisMonth);
+            outstandingBalance -= principalRepaidThisMonth;
+          }
+        } else {
+          if (assumptions['homeLoanStartMode'] == 'manual') {
+            hlPayment = 0;
+          } else {
+            hlPayment = interestForThisMonth;
+            principalRepaidThisMonth = 0;
+          }
+
+          // Track IDC for summary
+          if (m > 0) {
+            // Month 0 usually has no interest
+            totalIDC += interestForThisMonth;
+            if (interestForThisMonth > 0) {
+              if (!isFirstIDCPayment) {
+                minIDCEMI = interestForThisMonth;
+                isFirstIDCPayment = true;
+              }
+              maxIDCEMI = interestForThisMonth;
             }
           }
         }
-        double monthlyInterest = (cumulativeDisbursement * (hlRate / 100)) / 12;
-        monthlyHLOutflow = monthlyInterest;
-        totalIDC += monthlyInterest;
-
-        if (monthlyInterest > 0) {
-          if (!isFirstIDCPayment) {
-            minIDCEMI = monthlyInterest;
-            isFirstIDCPayment = true;
-          }
-          maxIDCEMI = monthlyInterest;
-        }
-      } else {
-        if (m >= realHomeLoanStartMonth) monthlyHLOutflow = hlEMI;
       }
 
-      double monthlyPL1 = (pl1Amount > 0 && m >= pl1StartMonth) ? pl1EMI : 0;
-      double monthlyPL2 = (pl2Amount > 0 && m >= pl2StartMonth) ? pl2EMI : 0;
-      double totalMonthOutflow = monthlyHLOutflow + monthlyPL1 + monthlyPL2;
+      double currentPL1 = (pl1Amount > 0 && m >= pl1StartMonth) ? pl1EMI : 0;
+      double currentPL2 = (pl2Amount > 0 && m >= pl2StartMonth) ? pl2EMI : 0;
+      double totalOutflow = hlPayment + currentPL1 + currentPL2;
 
-      if (isPrePossession) {
-        runningPrePossessionTotal += totalMonthOutflow;
-      } else {
-        runningPostPossessionTotal += totalMonthOutflow;
+      if (m > 0) {
+        if (m <= possessionMonths)
+          runningPrePossessionTotal += totalOutflow;
+        else
+          runningPostPossessionTotal += totalOutflow;
       }
-      // ... existing accumulation logic (runningPrePossessionTotal += ...) ...
 
-      // ✅ ADD THIS: Save the calculated values for this specific month
       monthlyLedger.add({
         'month': m,
-        'cumulativeLoan':
-            cumulativeDisbursement, // Shows the loan growing (Blue text in your image)
-        'hlComponent':
-            monthlyHLOutflow, // This is the missing IDC Interest! (₹1,500, ₹3,000 etc.)
-        'pl1Component': monthlyPL1, // PL1 EMI
-        'pl2Component': monthlyPL2, // PL2 EMI
-        'totalOutflow': totalMonthOutflow, // The sum (IDC + PL1)
-        // Helper flags for UI styling
-        'isPrePossession': isPrePossession,
-        'slabActive': (paymentPlan == 'clp' && m <= fundingEndMonth)
-            ? ((m - startMonth) ~/ interval) + 1
-            : 0,
+        'disbursement': currentDisbursement,
+        'activeSlabs': (m > fundingEndMonth)
+            ? 'Max'
+            : ((m - startMonth) / interval).floor() + 1,
+        'cumulativeDisbursement': cumulativeDisbursement,
+        'outstandingBalance': max(0, outstandingBalance),
+        'hlComponent': hlPayment,
+        'interestPart': interestForThisMonth,
+        'principalPart': principalRepaidThisMonth,
+        'isFullEMI': isFullEMI,
+        'pl1': currentPL1,
+        'totalOutflow': totalOutflow,
       });
     }
 
@@ -290,32 +327,13 @@ class PropertyCalculator {
         ? totalIDC / possessionMonths
         : 0;
 
+    // --- FINAL METRICS ---
     double hlPaymentsMade = max(
       0,
       totalHoldingMonths - (realHomeLoanStartMonth - 1),
     );
     double pl1PaymentsMade = max(0, totalHoldingMonths - pl1StartMonth);
     double pl2PaymentsMade = max(0, totalHoldingMonths - pl2StartMonth);
-
-    double hlOutstanding = calculateOutstanding(
-      hlAmount,
-      hlRate,
-      hlTerm,
-      hlPaymentsMade,
-    );
-    double pl1Outstanding = calculateOutstanding(
-      pl1Amount,
-      pl1Rate,
-      pl1Term,
-      pl1PaymentsMade,
-    );
-    double pl2Outstanding = calculateOutstanding(
-      pl2Amount,
-      pl2Rate,
-      pl2Term,
-      pl2PaymentsMade,
-    );
-    double totalOutstanding = hlOutstanding + pl1Outstanding + pl2Outstanding;
 
     double hlInterestPaid = calculateTotalInterest(
       hlAmount,
@@ -336,45 +354,60 @@ class PropertyCalculator {
       pl2PaymentsMade,
     );
 
-    double trueTotalInterest =
-        (paymentPlan == 'clp' ? totalIDC : 0) +
-        hlInterestPaid +
-        pl1InterestPaid +
-        pl2InterestPaid;
     double totalEMIPaid =
-        runningPrePossessionTotal + runningPostPossessionTotal;
+        (hlEMI * hlPaymentsMade) +
+        (pl1EMI * pl1PaymentsMade) +
+        (pl2EMI * pl2PaymentsMade) +
+        totalIDC;
 
-    // --- ROI CALCULATION FIX ---
-    // ✅ FIX 1: Denominator must be (Down Payment + Total EMIs), NOT (Total Cash Invested + Total EMIs)
-    // React Logic: const totalActualInvestment = downPaymentAmount + totalEMIPaid;
+    // ✅ Fix ROI Denominator
     double totalActualInvestment = dpAmount + totalEMIPaid;
 
-    // Base Result
     double baseExitPrice = getSafeValue(selections['selectedExitPrice']);
     double saleValue = size * baseExitPrice;
-    double leftoverCash = saleValue - totalOutstanding;
-    double netProfit = leftoverCash - totalEMIPaid - dpAmount;
 
-    // ✅ FIX 2: Use the corrected denominator for ROI
+    double hlOutstandingFinal = calculateOutstanding(
+      hlAmount,
+      hlRate,
+      hlTerm,
+      hlPaymentsMade,
+    );
+    double pl1OutstandingFinal = calculateOutstanding(
+      pl1Amount,
+      pl1Rate,
+      pl1Term,
+      pl1PaymentsMade,
+    );
+    double pl2OutstandingFinal = calculateOutstanding(
+      pl2Amount,
+      pl2Rate,
+      pl2Term,
+      pl2PaymentsMade,
+    );
+    double totalOutstandingFinal =
+        hlOutstandingFinal + pl1OutstandingFinal + pl2OutstandingFinal;
+
+    double leftoverCash = saleValue - totalOutstandingFinal;
+    double netProfit =
+        leftoverCash -
+        totalActualInvestment; // Net Gain = Cash in Hand - Cash Invested
     double roi = totalActualInvestment > 0
         ? (netProfit / totalActualInvestment) * 100
         : 0;
 
-    // Scenarios
-    Set<double> pricesToSimulate = {baseExitPrice};
-    if (selections['scenarioExitPrices'] != null) {
-      for (var p in selections['scenarioExitPrices']) {
-        pricesToSimulate.add(getSafeValue(p));
-      }
-    }
-    List<double> sortedPrices = pricesToSimulate.where((p) => p > 0).toList()
-      ..sort();
-
+    // --- SCENARIOS ---
     List<Map<String, dynamic>> scenarios = [];
+    Set<double> prices = {baseExitPrice};
+    if (selections['scenarioExitPrices'] != null) {
+      for (var p in selections['scenarioExitPrices'])
+        prices.add(getSafeValue(p));
+    }
+    List<double> sortedPrices = prices.where((p) => p > 0).toList()..sort();
+
     for (double price in sortedPrices) {
       double sSaleValue = size * price;
-      double sLeftover = sSaleValue - totalOutstanding;
-      double sNetProfit = sLeftover - totalEMIPaid - dpAmount;
+      double sLeftover = sSaleValue - totalOutstandingFinal;
+      double sNetProfit = sLeftover - totalActualInvestment;
       double sRoi = totalActualInvestment > 0
           ? (sNetProfit / totalActualInvestment) * 100
           : 0;
@@ -389,125 +422,58 @@ class PropertyCalculator {
       });
     }
 
-    // --- 4. SMART SAVER STRATEGY COMPARISON (CLP Only) ---
-    Map<String, dynamic>? strategyComparison;
-
-    if (paymentPlan == 'clp' && hlAmount > 0) {
-      double localInterval = interval;
-      double localSlabAmount = slabAmount;
-
-      // ✅ FIX 3: Updated Loop Logic to Match React Exactly (Linear Slabs, Modulo Interval)
-      // Simulation A: Standard CLP
-      double stdTotalPaid = 0;
-      double stdCumulativeDisb = 0;
-
-      for (int m = 1; m <= possessionMonths.toInt(); m++) {
-        // React Logic: if (m % interval === 0 && cumDisb < hlAmount)
-        if (m % localInterval == 0 && stdCumulativeDisb < hlAmount) {
-          stdCumulativeDisb += localSlabAmount;
-          if (stdCumulativeDisb > hlAmount) stdCumulativeDisb = hlAmount;
-        }
-        stdTotalPaid += (stdCumulativeDisb * (hlRate / 100)) / 12;
-      }
-
-      double standardBalanceAtPossession = hlAmount;
-
-      // Simulation B: Smart Saver
-      double smartTotalPaid = 0;
-      double smartBalance = 0;
-      double smartPrincipalPaid = 0;
-      double smartCumulativeDisb = 0;
-
-      for (int m = 1; m <= possessionMonths.toInt(); m++) {
-        // 1. Disbursement Logic (Same as Standard)
-        if (m % localInterval == 0 && smartCumulativeDisb < hlAmount) {
-          smartCumulativeDisb += localSlabAmount;
-          smartBalance += localSlabAmount;
-          if (smartCumulativeDisb > hlAmount) smartCumulativeDisb = hlAmount;
-        }
-
-        // 2. Payment Logic (Full EMI)
-        double monthlyInt = (smartBalance * (hlRate / 100)) / 12;
-        double principalComp = hlEMI - monthlyInt;
-
-        smartBalance -= principalComp;
-        smartPrincipalPaid += principalComp;
-        smartTotalPaid += hlEMI;
-      }
-
-      strategyComparison = {
-        'stdTotal': stdTotalPaid,
-        'stdBalance': standardBalanceAtPossession,
-        'smartTotal': smartTotalPaid,
-        'smartBalance': hlAmount - smartPrincipalPaid,
-        'savings': smartPrincipalPaid,
-      };
-    }
-
+    // --- CONSTRUCT FINAL REPORT (Matches Backend Structure) ---
     return {
-      'homeLoanStartMode': assumptions['homeLoanStartMode'],
-      'homeLoanStartMonth': assumptions['homeLoanStartMonth'],
-      'propertySize': size,
-      'purchasePrice': purchasePrice,
-      'totalCost': totalCost,
-      'gstCost': gstCost,
-      'stampDutyCost': stampDutyCost,
-      'homeLoanAmount': hlAmount,
-      'homeLoanShare': hlShare,
-      'downPaymentAmount': dpAmount,
-      'downPaymentShare': dpShare,
-      'personalLoan1Amount': pl1Amount,
-      'personalLoan1Share': pl1Share,
-      'personalLoan2Amount': pl2Amount,
-      'personalLoan2Share': pl2Share,
-      'strategyComparison': strategyComparison,
-      'totalCashInvested': totalCashInvested,
+      'detailedBreakdown': {
+        'propertySize': size,
+        'totalCost': totalCost,
+        'totalCashInvested': totalCashInvested,
+        'totalLoanOutstanding': totalOutstandingFinal,
+        'homeLoanEMI': hlEMI,
+        'personalLoan1EMI': pl1EMI,
+        'personalLoan2EMI': pl2EMI,
+        'gstCost': gstCost,
+        'stampDutyCost': stampDutyCost,
+        'homeLoanAmount': hlAmount,
+        'personalLoan1Amount': pl1Amount,
+        'personalLoan2Amount': pl2Amount,
+        'downPaymentAmount': dpAmount,
+        'homeLoanShare': hlShare,
+        'personalLoan1Share': pl1Share,
+        'personalLoan2Share': pl2Share,
+        'downPaymentShare': dpShare,
+        'totalInterestPaid':
+            hlInterestPaid + pl1InterestPaid + pl2InterestPaid + totalIDC,
+        'totalEMIPaid': totalEMIPaid,
+        'totalIDC': totalIDC,
+        'monthlyIDCEMI': monthlyIDCEMI,
 
-      'homeLoanEMI': hlEMI,
-      'personalLoan1EMI': pl1EMI,
-      'personalLoan2EMI': pl2EMI,
+        // ✅ RICH OBJECTS (Matches Backend)
+        'idcReport': {
+          'schedule': idcSchedule,
+          'grandTotalInterest': grandTotalInterest,
+          'minMonthlyInterest': baseSlabInterest,
+          'maxMonthlyInterest': baseSlabInterest * slabsCount,
+          'cutoffMonth': interestCutoffMonth,
+        },
+        'monthlyLedger': monthlyLedger,
 
-      'monthlyIDCEMI': monthlyIDCEMI,
-      'minIDCEMI': minIDCEMI,
-      'maxIDCEMI': maxIDCEMI,
-      'totalIDC': totalIDC,
-      'idcSchedule': idcSchedule,
-
-      'totalEMIPaid': totalEMIPaid,
-      'totalInterestPaid': trueTotalInterest,
-      'homeLoanInterestPaid': hlInterestPaid,
-
-      'saleValue': saleValue,
-      'totalLoanOutstanding': totalOutstanding,
-      'homeLoanOutstanding': hlOutstanding,
-      'personalLoan1Outstanding': pl1Outstanding,
-      'personalLoan2Outstanding': pl2Outstanding,
-
-      'leftoverCash': leftoverCash,
-      'netGainLoss': netProfit,
-      'roi': roi,
-
-      'years': (totalHoldingMonths / 12),
-      'monthlyLedger': monthlyLedger,
-      'possessionMonths': possessionMonths,
-      'totalHoldingMonths': totalHoldingMonths,
-      'constructionMonths': lastDemandMonth,
-
-      'prePossessionTotal': runningPrePossessionTotal,
-      'postPossessionTotal': runningPostPossessionTotal,
-      'postPossessionEMI': hlEMI + pl1EMI + pl2EMI,
-      'prePossessionMonths': min(totalHoldingMonths, possessionMonths),
-      'postPossessionMonths': max(0, totalHoldingMonths - possessionMonths),
-
-      'pl1StartMonth': pl1StartMonth,
-      'pl2StartMonth': pl2StartMonth,
-
-      'hasHomeLoan': hlAmount > 0,
-      'hasPersonalLoan1': pl1Amount > 0,
-      'hasPersonalLoan2': pl2Amount > 0,
-      'hasIDC': totalIDC > 0,
-
-      'exitPrice': baseExitPrice,
+        'saleValue': saleValue,
+        'leftoverCash': leftoverCash,
+        'netGainLoss': netProfit,
+        'roi': roi,
+        'exitPrice': baseExitPrice,
+        'years': yearsDisplay,
+        'prePossessionTotal': runningPrePossessionTotal,
+        'postPossessionTotal':
+            (hlEMI + pl1EMI + pl2EMI) *
+            max(0, totalHoldingMonths - possessionMonths),
+        'possessionMonths': possessionMonths,
+        'totalHoldingMonths': totalHoldingMonths,
+        'homeLoanStartMonth': realHomeLoanStartMonth,
+        'postPossessionEMI': hlEMI + pl1EMI + pl2EMI,
+        'postPossessionMonths': max(0, totalHoldingMonths - possessionMonths),
+      },
       'multipleScenarios': scenarios,
     };
   }

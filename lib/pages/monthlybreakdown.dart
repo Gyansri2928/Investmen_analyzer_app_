@@ -1,230 +1,117 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart'; // For currency formatting
+import 'package:intl/intl.dart';
 import '../main.dart'; // For AppColors
 
-class MonthlyBreakdownPage extends StatefulWidget {
+class MonthlyBreakdownPage extends StatelessWidget {
   final Map<String, dynamic> params;
 
   const MonthlyBreakdownPage({super.key, required this.params});
 
-  @override
-  State<MonthlyBreakdownPage> createState() => _MonthlyBreakdownPageState();
-}
-
-class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
-  List<Map<String, dynamic>> _monthlyData = [];
-  double _grandTotalOutflow = 0;
-  double _minOutflow = 0;
-  double _maxOutflow = 0;
-  double _fullHomeLoanEMI = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _calculateLedger();
-  }
-
-  String _formatCurrency(double val) {
+  // --- HELPERS ---
+  String _formatCurrency(dynamic val) {
+    if (val == null) return '₹0';
+    double v = double.tryParse(val.toString()) ?? 0;
     return NumberFormat.currency(
       locale: 'en_IN',
       symbol: '₹',
       decimalDigits: 0,
-    ).format(val);
+    ).format(v);
   }
 
-  // ✅ HELPER 1: Safe Int Parsing (for inputs)
-  int _safeInt(dynamic val) {
-    if (val == null) return 0;
-    return (double.tryParse(val.toString()) ?? 0).toInt();
-  }
-
-  // ✅ HELPER 2: Safe Double Parsing (Prevents crash when casting int to double)
   double _safeDouble(dynamic val) {
     if (val == null) return 0.0;
-    if (val is int) return val.toDouble();
-    if (val is double) return val;
     return double.tryParse(val.toString()) ?? 0.0;
-  }
-
-  void _calculateLedger() {
-    // 1. Extract Params safely
-    final List idcSchedule = widget.params['idcSchedule'] ?? [];
-    final double pl1EMI = _safeDouble(widget.params['pl1EMI']);
-
-    final int possessionMonths = _safeInt(widget.params['possessionMonths']) > 0
-        ? _safeInt(widget.params['possessionMonths'])
-        : 24;
-
-    final double homeLoanAmount = _safeDouble(widget.params['homeLoanAmount']);
-    // Fallback to 9.0 if 0 is passed accidentally
-    double interestRate = _safeDouble(widget.params['interestRate']);
-    if (interestRate == 0) interestRate = 9.0;
-    final int homeLoanTerm = _safeInt(widget.params['homeLoanTerm']);
-
-    final String homeLoanStartMode =
-        widget.params['homeLoanStartMode'] ?? 'default';
-    final int? manualStartMonth = widget.params['manualStartMonth'] != null
-        ? _safeInt(widget.params['manualStartMonth'])
-        : null;
-
-    final int lastBankDisbursementMonth = _safeInt(
-      widget.params['lastBankDisbursementMonth'],
-    );
-
-    // 2. Calculate Full EMI
-    double monthlyRate = interestRate / 12 / 100;
-    int months = homeLoanTerm > 0 ? homeLoanTerm * 12 : 240;
-
-    if (monthlyRate == 0) {
-      _fullHomeLoanEMI = months > 0 ? homeLoanAmount / months : 0;
-    } else {
-      _fullHomeLoanEMI =
-          (homeLoanAmount * monthlyRate * pow(1 + monthlyRate, months)) /
-          (pow(1 + monthlyRate, months) - 1);
-    }
-
-    // 3. Setup Timelines
-    int derivedLastMonth = idcSchedule.isNotEmpty
-        ? idcSchedule.map((s) => _safeInt(s['releaseMonth'])).reduce(max)
-        : possessionMonths;
-
-    int fundingEndMonth = lastBankDisbursementMonth > 0
-        ? lastBankDisbursementMonth
-        : derivedLastMonth;
-
-    int actualHLStartMonth;
-    if (homeLoanStartMode == 'manual') {
-      actualHLStartMonth = manualStartMonth ?? 0;
-    } else {
-      actualHLStartMonth = fundingEndMonth + 1;
-    }
-
-    // 4. Generate Data Loop
-    List<Map<String, dynamic>> data = [];
-    double slabAmount = idcSchedule.isNotEmpty
-        ? homeLoanAmount / idcSchedule.length
-        : 0;
-
-    double cumulativeDisbursement = 0;
-    double outstandingBalance = 0;
-    int activeSlabs = 0;
-
-    for (int m = 0; m <= possessionMonths; m++) {
-      double currentDisbursement = 0;
-      double interestForThisMonth = 0;
-      double principalRepaidThisMonth = 0;
-
-      // A. Disbursement Logic
-      if (m <= fundingEndMonth) {
-        bool isScheduleMonth = idcSchedule.any(
-          (s) => _safeInt(s['releaseMonth']) == m,
-        );
-
-        if (isScheduleMonth && cumulativeDisbursement < (homeLoanAmount - 10)) {
-          currentDisbursement = slabAmount;
-          cumulativeDisbursement += slabAmount;
-
-          if (homeLoanStartMode == 'manual') {
-            outstandingBalance += slabAmount;
-          } else {
-            outstandingBalance = cumulativeDisbursement;
-          }
-          activeSlabs++;
-        }
-      }
-
-      // B. Interest Logic
-      if (outstandingBalance > 0) {
-        interestForThisMonth = (outstandingBalance * (interestRate / 100)) / 12;
-      }
-
-      // C. Payment Logic
-      double hlPayment = 0;
-      bool isFullEMI = false;
-
-      if (m >= actualHLStartMonth) {
-        // Full EMI Phase
-        hlPayment = _fullHomeLoanEMI;
-        isFullEMI = true;
-        if (outstandingBalance > 0) {
-          principalRepaidThisMonth = max(0, hlPayment - interestForThisMonth);
-          outstandingBalance -= principalRepaidThisMonth;
-        }
-      } else {
-        // Pre-EMI Phase
-        if (homeLoanStartMode == 'manual') {
-          hlPayment = 0;
-        } else {
-          // Standard: Pay exactly the interest
-          hlPayment = interestForThisMonth;
-          principalRepaidThisMonth = 0;
-        }
-      }
-
-      double currentPL1 = (m == 0) ? 0 : pl1EMI;
-
-      data.add({
-        'month': m,
-        'disbursement': currentDisbursement,
-        'activeSlabs': m > fundingEndMonth ? 'Max' : activeSlabs,
-        'cumulativeDisbursement': cumulativeDisbursement,
-        'outstandingBalance': max(0, outstandingBalance),
-        'hlComponent': hlPayment,
-        'interestPart': interestForThisMonth,
-        'principalPart': principalRepaidThisMonth,
-        'isFullEMI': isFullEMI,
-        'pl1': currentPL1,
-        'totalOutflow': hlPayment + currentPL1,
-      });
-    }
-
-    // 5. Calculate Stats (CRASH PROOF)
-    double totalOut = data.fold(
-      0.0,
-      (sum, item) => sum + _safeDouble(item['totalOutflow']),
-    );
-    List<double> outflows = data
-        .map((e) => _safeDouble(e['totalOutflow']))
-        .where((v) => v > 0)
-        .toList();
-
-    setState(() {
-      _monthlyData = data;
-      _grandTotalOutflow = totalOut;
-      _minOutflow = outflows.isNotEmpty ? outflows.reduce(min) : 0;
-      _maxOutflow = outflows.isNotEmpty ? outflows.reduce(max) : 0;
-    });
   }
 
   @override
   Widget build(BuildContext context) {
+    // 1. EXTRACT DATA DIRECTLY FROM BACKEND (No local math!)
+    final List<dynamic> monthlyLedger = params['monthlyLedger'] ?? [];
+
+    // Context Params (Visual/Summary only)
+    final String propertyName = params['propertyName'] ?? "Property";
+    final int possessionMonths =
+        int.tryParse(params['possessionMonths'].toString()) ?? 24;
+    final String homeLoanStartMode = params['homeLoanStartMode'] ?? 'default';
+    // For summary card if needed
+
+    // 2. CALCULATE SUMMARIES (From the list we received)
+    double grandTotalOutflow = 0;
+    double minOutflow = 0;
+    double maxOutflow = 0;
+    double displayedPl1EMI = _safeDouble(params['pl1EMI']);
+
+    if (monthlyLedger.isNotEmpty) {
+      grandTotalOutflow = monthlyLedger.fold(
+        0.0,
+        (sum, row) => sum + _safeDouble(row['totalOutflow']),
+      );
+
+      // Get list of non-zero outflows for min/max
+      final outflows = monthlyLedger
+          .map((row) => _safeDouble(row['totalOutflow']))
+          .where((val) => val > 0)
+          .toList();
+
+      if (outflows.isNotEmpty) {
+        minOutflow = outflows.reduce(min);
+        maxOutflow = outflows.reduce(max);
+      }
+      if (displayedPl1EMI == 0) {
+        final pl1Values = monthlyLedger
+            .map((row) => _safeDouble(row['pl1'])) // Looking for key 'pl1'
+            .where((val) => val > 0)
+            .toList();
+
+        if (pl1Values.isNotEmpty) {
+          displayedPl1EMI = pl1Values.reduce(
+            max,
+          ); // Use the actual EMI found in data
+        }
+      }
+    }
+
+    // 3. UI SETUP
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final bg = isDark ? const Color(0xFF0F172A) : Colors.grey.shade100;
+    final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
     final text = isDark ? Colors.white : Colors.black87;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
+      backgroundColor: bg,
       appBar: AppBar(
         title: const Text(
           "Monthly Cashflow Ledger",
           style: TextStyle(fontSize: 16),
         ),
-        backgroundColor: bg,
+        backgroundColor: cardBg,
         foregroundColor: text,
         elevation: 0,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- SUMMARY CARDS ---
+            // Header Info
+            Text(
+              "Breakdown for $propertyName (Month 0 - $possessionMonths)",
+              style: TextStyle(
+                color: isDark ? Colors.white54 : Colors.grey.shade600,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Summary Cards
             Row(
               children: [
                 Expanded(
                   child: _buildSummaryCard(
+                    context,
                     "Total Outflow",
-                    _grandTotalOutflow,
+                    grandTotalOutflow,
                     Icons.layers,
                     Colors.amber,
                   ),
@@ -232,8 +119,9 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _buildSummaryCard(
+                    context,
                     "Min Monthly",
-                    _minOutflow,
+                    minOutflow,
                     Icons.arrow_downward,
                     Colors.green,
                   ),
@@ -245,17 +133,20 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
               children: [
                 Expanded(
                   child: _buildSummaryCard(
+                    context,
                     "Max Monthly",
-                    _maxOutflow,
+                    maxOutflow,
                     Icons.arrow_upward,
                     Colors.red,
                   ),
                 ),
                 const SizedBox(width: 10),
+                // We use the PL1 from the first row of ledger if available, else 0
                 Expanded(
                   child: _buildSummaryCard(
+                    context,
                     "Fixed PL1 EMI",
-                    _safeDouble(widget.params['pl1EMI']),
+                    displayedPl1EMI,
                     Icons.account_balance_wallet,
                     Colors.blue,
                   ),
@@ -263,14 +154,19 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
               ],
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
-            // --- THE TABLE ---
+            // The Table
             Container(
               decoration: BoxDecoration(
-                color: bg,
+                color: cardBg,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8)],
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 8,
+                  ),
+                ],
               ),
               clipBehavior: Clip.antiAlias,
               child: SingleChildScrollView(
@@ -280,17 +176,18 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
                     isDark ? Colors.white10 : Colors.grey.shade100,
                   ),
                   columnSpacing: 20,
-                  columns: _buildColumns(isDark),
-                  rows: _monthlyData.map((row) {
-                    // ✅ CRASH FIX: Use _safeDouble() here instead of (val as double)
-                    final isDisb = _safeDouble(row['disbursement']) > 0;
+                  columns: _buildColumns(isDark, homeLoanStartMode),
+                  rows: monthlyLedger.map<DataRow>((row) {
+                    // ✅ READ VALUES SAFELY
+                    final disbursement = _safeDouble(row['disbursement']);
+                    final isDisb = disbursement > 0;
 
                     return DataRow(
                       color: WidgetStateProperty.resolveWith<Color?>((states) {
                         if (isDisb) return Colors.blue.withOpacity(0.05);
-                        return null; // default
+                        return null;
                       }),
-                      cells: _buildCells(row, isDark),
+                      cells: _buildCells(row, isDark, homeLoanStartMode),
                     );
                   }).toList(),
                 ),
@@ -302,7 +199,10 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
     );
   }
 
+  // --- WIDGET HELPERS ---
+
   Widget _buildSummaryCard(
+    BuildContext context,
     String title,
     double value,
     IconData icon,
@@ -326,7 +226,7 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
               Expanded(
                 child: Text(
                   title,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 10,
                     color: Colors.grey,
                     fontWeight: FontWeight.bold,
@@ -349,23 +249,22 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
     );
   }
 
-  List<DataColumn> _buildColumns(bool isDark) {
-    final isManual = widget.params['homeLoanStartMode'] == 'manual';
+  List<DataColumn> _buildColumns(bool isDark, String startMode) {
     TextStyle headerStyle = TextStyle(
       fontWeight: FontWeight.bold,
       fontSize: 12,
       color: isDark ? Colors.white70 : Colors.black87,
     );
 
-    if (isManual) {
+    if (startMode == 'manual') {
       return [
         DataColumn(label: Text("Mo", style: headerStyle)),
         DataColumn(label: Text("Disbursement", style: headerStyle)),
-        DataColumn(label: Text("Loan Bal", style: headerStyle)), // Cyan
-        DataColumn(label: Text("Interest", style: headerStyle)), // Yellow
+        DataColumn(label: Text("Loan Bal", style: headerStyle)),
+        DataColumn(label: Text("Interest", style: headerStyle)),
         DataColumn(label: Text("HL Paid", style: headerStyle)),
         DataColumn(label: Text("PL1", style: headerStyle)),
-        DataColumn(label: Text("Total", style: headerStyle)), // Brand Color
+        DataColumn(label: Text("Total", style: headerStyle)),
       ];
     } else {
       return [
@@ -380,8 +279,7 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
     }
   }
 
-  List<DataCell> _buildCells(Map<String, dynamic> row, bool isDark) {
-    final isManual = widget.params['homeLoanStartMode'] == 'manual';
+  List<DataCell> _buildCells(dynamic row, bool isDark, String startMode) {
     TextStyle cellStyle = TextStyle(
       fontSize: 12,
       color: isDark ? Colors.white70 : Colors.black87,
@@ -392,7 +290,7 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
       color: isDark ? Colors.white : Colors.black,
     );
 
-    // ✅ SAFE VALUES FOR CELLS
+    // Extract values directly
     double disbursement = _safeDouble(row['disbursement']);
     double outstanding = _safeDouble(row['outstandingBalance']);
     double interest = _safeDouble(row['interestPart']);
@@ -400,8 +298,9 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
     double pl1 = _safeDouble(row['pl1']);
     double total = _safeDouble(row['totalOutflow']);
     double cumDisb = _safeDouble(row['cumulativeDisbursement']);
+    bool isFullEMI = row['isFullEMI'] == true;
 
-    if (isManual) {
+    if (startMode == 'manual') {
       return [
         DataCell(Text(row['month'].toString(), style: boldStyle)),
         DataCell(
@@ -427,7 +326,7 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
             _formatCurrency(hlComp),
             style: TextStyle(
               fontSize: 12,
-              color: (row['isFullEMI'] == true) ? Colors.green : null,
+              color: isFullEMI ? Colors.green : null,
             ),
           ),
         ),
@@ -469,12 +368,12 @@ class _MonthlyBreakdownPageState extends State<MonthlyBreakdownPage> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
-                  color: (row['isFullEMI'] == true)
+                  color: isFullEMI
                       ? Colors.green
                       : (isDark ? Colors.white70 : Colors.black87),
                 ),
               ),
-              if (row['isFullEMI'] == true)
+              if (isFullEMI)
                 const Text(
                   "Full EMI",
                   style: TextStyle(fontSize: 8, color: Colors.green),

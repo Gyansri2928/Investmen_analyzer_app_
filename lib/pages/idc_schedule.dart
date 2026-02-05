@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../main.dart'; // For AppColors
@@ -8,15 +7,22 @@ class IdcSchedulePage extends StatelessWidget {
 
   const IdcSchedulePage({super.key, required this.params});
 
-  String _formatCurrency(double val) {
+  // --- HELPERS ---
+  String _formatCurrency(dynamic val) {
+    if (val == null) return '₹0';
+    double v = double.tryParse(val.toString()) ?? 0;
     return NumberFormat.currency(
       locale: 'en_IN',
       symbol: '₹',
       decimalDigits: 0,
-    ).format(val);
+    ).format(v);
   }
 
-  // ✅ Helper for safe parsing
+  double _safeDouble(dynamic val) {
+    if (val == null) return 0.0;
+    return double.tryParse(val.toString()) ?? 0.0;
+  }
+
   int _safeInt(dynamic val) {
     if (val == null) return 0;
     return (double.tryParse(val.toString()) ?? 0).toInt();
@@ -24,76 +30,36 @@ class IdcSchedulePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. EXTRACT DATA
-    final List idcSchedule = params['idcSchedule'] ?? [];
-    final double pl1EMI = (double.tryParse(params['pl1EMI'].toString()) ?? 0);
-    final int possessionMonths = _safeInt(params['possessionMonths']);
-    final double homeLoanAmount =
-        (double.tryParse(params['homeLoanAmount'].toString()) ?? 0);
-    final double interestRate =
-        (double.tryParse(params['interestRate'].toString()) ?? 9.0);
+    // 1. EXTRACT DATA DIRECTLY FROM BACKEND REPORT
+    // We no longer calculate interest here. We trust the server.
+    final Map<String, dynamic> report = params['idcReport'] ?? {};
+    final List schedule = report['schedule'] ?? [];
 
-    // Limits
-    final int holdingLimit = _safeInt(params['totalHoldingMonths']);
-    final int lastBankDisbursementMonth = _safeInt(
-      params['lastBankDisbursementMonth'],
-    );
-    final String homeLoanStartMode = params['homeLoanStartMode'] ?? 'default';
-    final int manualStartMonth = _safeInt(params['manualStartMonth']);
+    // Summary Metrics from Backend
+    final double grandTotalInterest = _safeDouble(report['grandTotalInterest']);
+    final double minMonthlyInterest = _safeDouble(report['minMonthlyInterest']);
+    final double maxMonthlyInterest = _safeDouble(report['maxMonthlyInterest']);
+    final int cutoffMonth = _safeInt(
+      report['cutoffMonth'],
+    ); // Interest End Month
 
-    // Visual Cutoff (for filtering list length only)
-    final int derivedLastMonth = idcSchedule.isNotEmpty
-        ? idcSchedule.map((s) => _safeInt(s['releaseMonth'])).reduce(max)
-        : possessionMonths;
+    // Context Data (passed for UI context, not calculation)
+    final double pl1EMI = _safeDouble(params['pl1EMI']);
+    final double interestRate = _safeDouble(params['interestRate']);
 
-    final int fundingEndMonth = lastBankDisbursementMonth > 0
-        ? lastBankDisbursementMonth
-        : derivedLastMonth;
-
-    // --- LOGIC 1: DETERMINE INTEREST CUTOFF ---
-    int interestEndMonth = possessionMonths;
-    if (lastBankDisbursementMonth > 0) {
-      interestEndMonth = lastBankDisbursementMonth;
-    }
-    // Manual Mode: Interest stops 1 month before HL starts (React Logic)
-    if (homeLoanStartMode == 'manual' && manualStartMonth > 0) {
-      interestEndMonth = manualStartMonth - 1;
-    }
-
-    final int effectiveHoldingLimit = holdingLimit > 0
-        ? holdingLimit
-        : possessionMonths;
-    final int visualCutoffMonth = min(fundingEndMonth, effectiveHoldingLimit);
-
-    // 2. FILTER & CALCULATE
-    final filteredSchedule = idcSchedule
-        .where((row) => _safeInt(row['releaseMonth']) <= visualCutoffMonth)
+    // 2. FILTERING (Visual only)
+    // The backend sends all slabs. We filter to show only relevant ones up to cutoff.
+    // (Optional: You can show all if you want, but hiding future ones is cleaner)
+    final visualSchedule = schedule
+        .where(
+          (row) =>
+              _safeInt(row['releaseMonth']) <=
+              (cutoffMonth > 0 ? cutoffMonth : 999),
+        )
         .toList();
 
-    final double disbursementPerSlab = idcSchedule.isNotEmpty
-        ? homeLoanAmount / idcSchedule.length
-        : 0;
-    final double baseSlabInterest =
-        (disbursementPerSlab * (interestRate / 100)) / 12;
-
-    double grandTotalInterest = 0;
-    for (var row in filteredSchedule) {
-      int releaseMonth = _safeInt(row['releaseMonth']);
-
-      // STOPPER: If slab is released AFTER the cutoff, ignore it
-      if (releaseMonth > interestEndMonth) continue;
-
-      // MATH: Calculate duration (React Logic: End - Release)
-      int duration = max(0, interestEndMonth - releaseMonth);
-
-      grandTotalInterest += (baseSlabInterest * duration);
-    }
-
-    final double minMonthlyInterest = filteredSchedule.isNotEmpty
-        ? baseSlabInterest
-        : 0;
-    final double maxMonthlyInterest =
-        baseSlabInterest * filteredSchedule.length;
+    // If no cutoff (e.g. 0), show everything
+    final displayList = visualSchedule.isNotEmpty ? visualSchedule : schedule;
 
     // 3. UI SETUP
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -118,7 +84,7 @@ class IdcSchedulePage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              "Breakdown up to Month $visualCutoffMonth",
+              "Breakdown up to Month ${cutoffMonth > 0 ? cutoffMonth : 'Possession'}",
               style: TextStyle(
                 color: isDark ? Colors.white54 : Colors.grey.shade600,
                 fontSize: 13,
@@ -126,6 +92,7 @@ class IdcSchedulePage extends StatelessWidget {
             ),
             const SizedBox(height: 16),
 
+            // Summary Cards
             Row(
               children: [
                 Expanded(
@@ -176,6 +143,7 @@ class IdcSchedulePage extends StatelessWidget {
 
             const SizedBox(height: 24),
 
+            // Data Table
             Container(
               decoration: BoxDecoration(
                 color: cardBg,
@@ -236,12 +204,9 @@ class IdcSchedulePage extends StatelessWidget {
                         ),
                       ),
                     ),
-                    // ✅ DYNAMIC HEADER (Possession vs Interest Duration)
                     DataColumn(
                       label: Text(
-                        interestEndMonth < possessionMonths
-                            ? "Int.\nDur."
-                            : "To Poss.",
+                        "Int.\nDur.",
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
@@ -270,30 +235,19 @@ class IdcSchedulePage extends StatelessWidget {
                       ),
                     ),
                   ],
-                  rows: filteredSchedule.asMap().entries.map((entry) {
-                    int idx = entry.key;
-                    var row = entry.value;
-
+                  rows: displayList.map<DataRow>((row) {
+                    // ✅ READ DIRECTLY FROM BACKEND (No Math Here!)
                     int slabNo = _safeInt(row['slabNo']);
                     int releaseMonth = _safeInt(row['releaseMonth']);
-
-                    // --- LOGIC CHANGE 3: CORRECT DURATION CALCULATION ---
-                    int interestDuration = 0;
-                    if (releaseMonth <= interestEndMonth) {
-                      interestDuration = max(
-                        0,
-                        interestEndMonth - releaseMonth + 1,
-                      );
-                    }
-
-                    double cumulativeMonthlyInterest =
-                        baseSlabInterest * (idx + 1);
-                    double totalCostForSlab =
-                        baseSlabInterest * interestDuration;
+                    double amount = _safeDouble(row['amount']);
+                    int duration = _safeInt(row['duration']);
+                    double monthlyInt = _safeDouble(
+                      row['cumulativeMonthlyInterest'],
+                    ); // The cumulated value for this month
+                    double totalCost = _safeDouble(row['totalCostForSlab']);
 
                     return DataRow(
-                      // Gray out rows with no interest duration
-                      color: interestDuration <= 0
+                      color: duration <= 0
                           ? WidgetStateProperty.all(
                               isDark ? Colors.white10 : Colors.grey.shade200,
                             )
@@ -317,7 +271,7 @@ class IdcSchedulePage extends StatelessWidget {
                         ),
                         DataCell(
                           Text(
-                            _formatCurrency(disbursementPerSlab),
+                            _formatCurrency(amount),
                             style: const TextStyle(
                               fontSize: 12,
                               color: Colors.blue,
@@ -333,27 +287,24 @@ class IdcSchedulePage extends StatelessWidget {
                             ),
                           ),
                         ),
-                        // ✅ FIX: SHOW INTEREST DURATION (Not Months To Possession)
+                        // Interest Duration
                         DataCell(
                           Center(
                             child: Text(
-                              interestDuration > 0
-                                  ? interestDuration.toString()
-                                  : "-",
+                              duration > 0 ? duration.toString() : "-",
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
-                                color: interestDuration > 0
-                                    ? text
-                                    : Colors.grey,
+                                color: duration > 0 ? text : Colors.grey,
                               ),
                             ),
                           ),
                         ),
+                        // Monthly Interest (Visual Check)
                         DataCell(
-                          interestDuration > 0
+                          duration > 0
                               ? Text(
-                                  _formatCurrency(cumulativeMonthlyInterest),
+                                  _formatCurrency(monthlyInt),
                                   style: const TextStyle(
                                     fontSize: 12,
                                     color: Colors.orange,
@@ -364,9 +315,10 @@ class IdcSchedulePage extends StatelessWidget {
                                   style: TextStyle(color: Colors.grey),
                                 ),
                         ),
+                        // Total Cost for Slab
                         DataCell(
                           Text(
-                            _formatCurrency(totalCostForSlab),
+                            _formatCurrency(totalCost),
                             style: const TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
@@ -383,7 +335,7 @@ class IdcSchedulePage extends StatelessWidget {
 
             const SizedBox(height: 20),
 
-            // Info Footer
+            // Footer Info
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
